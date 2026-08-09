@@ -1,0 +1,82 @@
+"""数据模型（内容管线相关，M1）
+题材模板 / 书 / 章节 / 生成任务 / 审核记录
+"""
+from datetime import datetime
+from sqlalchemy import (Column, Integer, String, Text, DateTime, Boolean,
+                        ForeignKey, JSON, Float, UniqueConstraint)
+from sqlalchemy.orm import relationship
+from .db import Base
+
+
+class Theme(Base):
+    """题材模板（含权重，供生成调度）"""
+    __tablename__ = "themes"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(64), nullable=False)            # 如 年代家庭
+    prompt_template = Column(Text, nullable=False)       # 题材提示词模板
+    weight = Column(Float, default=1.0)                  # 生成权重（回传调整）
+    enabled = Column(Boolean, default=True)
+    target_chapters = Column(Integer, default=30)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    books = relationship("Book", back_populates="theme")
+
+
+class Book(Base):
+    __tablename__ = "books"
+    id = Column(Integer, primary_key=True)
+    theme_id = Column(Integer, ForeignKey("themes.id"))
+    title = Column(String(128), nullable=False)
+    intro = Column(Text, default="")
+    outline = Column(Text, default="")                    # 全书大纲
+    status = Column(String(16), default="draft")          # draft|generating|reviewing|on_shelf|off_shelf
+    total_chapters = Column(Integer, default=0)
+    ai_label = Column(Boolean, default=True)              # AI 生成标识（合规必须）
+    created_at = Column(DateTime, default=datetime.utcnow)
+    theme = relationship("Theme", back_populates="books")
+    chapters = relationship("Chapter", back_populates="book", order_by="Chapter.no")
+
+
+class Chapter(Base):
+    __tablename__ = "chapters"
+    __table_args__ = (UniqueConstraint("book_id", "no", name="uq_book_chapter"),)
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey("books.id"))
+    no = Column(Integer, nullable=False)                  # 第几章
+    title = Column(String(128), default="")
+    content = Column(Text, default="")
+    word_count = Column(Integer, default=0)
+    # 一致性校验 + 机审结果
+    consistency_conflicts = Column(JSON, default=list)    # 记忆层校验冲突
+    review_status = Column(String(16), default="pending") # pending|machine_pass|machine_hit|manual_pass|rejected
+    review_label = Column(String(32), default="")         # TMS 返回 Label
+    tts_segments = Column(JSON, default=list)             # 听书段时间轴
+    created_at = Column(DateTime, default=datetime.utcnow)
+    book = relationship("Book", back_populates="chapters")
+
+
+class GenTask(Base):
+    """生成任务（日常/分支/新书/重写），dedup_key 防重"""
+    __tablename__ = "gen_tasks"
+    id = Column(Integer, primary_key=True)
+    task_type = Column(String(16), nullable=False)        # new_book|daily|branch|rewrite
+    book_id = Column(Integer, ForeignKey("books.id"), nullable=True)
+    dedup_key = Column(String(128), unique=True, nullable=False)
+    status = Column(String(16), default="queued")         # queued|running|done|failed
+    payload = Column(JSON, default=dict)
+    result = Column(JSON, default=dict)
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class ReviewRecord(Base):
+    """审核记录（机审 + 人审）"""
+    __tablename__ = "review_records"
+    id = Column(Integer, primary_key=True)
+    chapter_id = Column(Integer, ForeignKey("chapters.id"))
+    stage = Column(String(16), nullable=False)            # machine|manual
+    action = Column(String(16), default="")               # pass|hit|reject|approve
+    label = Column(String(32), default="")
+    detail = Column(Text, default="")
+    reviewer = Column(String(64), default="system")
+    created_at = Column(DateTime, default=datetime.utcnow)
