@@ -1,0 +1,22 @@
+# 后端基础依赖
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+pydantic==2.9.0
+python-dotenv==1.0.1
+
+# 数据层
+psycopg2-binary==2.9.9
+redis==5.0.8
+qdrant-client==1.11.0
+
+# 任务队列
+celery==5.4.0
+
+# LLM / 腾讯云
+openai==1.51.0
+tencentcloud-sdk-python-tts==3.0.0
+tencentcloud-sdk-python-tms==3.0.0
+cos-python-sdk-v5==1.9.30
+
+# 工具
+requests==2.32.3
