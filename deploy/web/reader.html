@@ -105,9 +105,8 @@ async function openChapter(bid,no){
         ${paras.map((p,i)=>`<p class="para" data-i="${i}">${esc(p)}</p>`).join('')}
       </div>
       <div class="interact" id="interact">
-        <div class="q">读到这儿，你想怎么发展？</div>
-        <button class="opt" onclick="choose(0)">平平淡淡，接着往下过</button>
-        <button class="opt" onclick="choose(1)">来点波折，添些看头</button>
+        <div class="q" id="iq">互动加载中…</div>
+        <div id="iopts"></div>
         <div class="resp" id="resp" style="display:none"></div>
       </div>
       <div class="bar">
@@ -124,7 +123,34 @@ async function openChapter(bid,no){
     `;
     window.scrollTo(0,0);
     if(c.audio_url) setupAudio(c);
+    loadInteract(c.chapter_id);
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+// 互动：拉取真实节点（提问+选项）
+async function loadInteract(chapterId){
+  try{
+    const n = await api('/interact/node/'+chapterId);
+    document.getElementById('iq').textContent = n.question;
+    document.getElementById('iopts').innerHTML = n.options.map((o,i)=>
+      `<button class="opt" onclick="choose(${i})">${esc(o)}</button>`).join('');
+    state.nodeReady = true;
+  }catch(e){
+    document.getElementById('iq').textContent = '互动加载失败，稍后再试';
+  }
+}
+// 互动：选择后接 LLM 回响
+async function choose(i){
+  const r=document.getElementById('resp'); r.style.display='block'; r.textContent='想想…';
+  document.querySelectorAll('#iopts .opt').forEach(b=>b.disabled=true);
+  try{
+    const resp = await fetch(API+'/interact/choose',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chapter_id:state.chapter.chapter_id, option_idx:i, is_rerun:false})});
+    const j = await resp.json();
+    if(j.code!==0) throw new Error(j.msg);
+    r.textContent = j.data.echo;
+  }catch(e){ r.textContent='回响生成失败：'+e.message; }
+  document.querySelectorAll('#iopts .opt').forEach(b=>b.disabled=false);
 }
 
 function setupAudio(c){
@@ -152,10 +178,6 @@ function highlight(ms){
 }
 function clearHl(){ document.querySelectorAll('.para').forEach(p=>p.classList.remove('active')); }
 function nav(d){ const c=state.chapter; openChapter(c.book_id, c.no+d); }
-function choose(i){
-  const r=document.getElementById('resp'); r.style.display='block';
-  r.textContent = i===0 ? '好，日子就该这样，安安稳稳。' : '行，给你添点儿热闹，往下看。';
-}
 window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose;
 showHome();
 </script>

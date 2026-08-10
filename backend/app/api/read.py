@@ -43,7 +43,7 @@ def chapter_read(bid: int, no: int, db: Session = Depends(get_db)):
     if not ch or ch.review_status != "manual_pass":
         raise BizError(ERR_NOT_FOUND, "章节不存在或未过审")
     return ok({
-        "book_id": bid, "no": no, "title": ch.title or f"第{no}章",
+        "book_id": bid, "chapter_id": ch.id, "no": no, "title": ch.title or f"第{no}章",
         "content": ch.content, "word_count": ch.word_count,
         "ai_label": b.ai_label,
         "tts_segments": ch.tts_segments or [],

@@ -80,3 +80,15 @@ class ReviewRecord(Base):
     detail = Column(Text, default="")
     reviewer = Column(String(64), default="system")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class InteractNode(Base):
+    """章内互动节点：一个互动点 + 若干选项，选项的回响段由 LLM 生成并缓存"""
+    __tablename__ = "interact_nodes"
+    id = Column(Integer, primary_key=True)
+    chapter_id = Column(Integer, ForeignKey("chapters.id"))
+    question = Column(Text, nullable=False)                # 互动提问
+    options = Column(JSON, default=list)                   # ["选项A文案", "选项B文案"]
+    responses = Column(JSON, default=dict)                 # {"0": "回响段A", "1": "回响段B"}（缓存）
+    position = Column(Integer, default=0)                  # 出现位置（第几段后）
+    created_at = Column(DateTime, default=datetime.utcnow)
