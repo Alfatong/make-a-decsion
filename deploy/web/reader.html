@@ -9,9 +9,10 @@
     --bg: #FBF7F0; --bg2: #F4EDE1; --ink: #2E2A25; --muted: #7C7266;
     --accent: #B3541E; --accent2: #3F6C51; --hl: #FFE9B0; --rule: #E3D9C8;
     --fs: 22px; /* 适老大字号 */
+    --lh: 2.0;
   }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  body { background:var(--bg); color:var(--ink); font-family:"PingFang SC","Microsoft YaHei",sans-serif; font-size:var(--fs); line-height:2.0; }
+  body { background:var(--bg); color:var(--ink); font-family:"PingFang SC","Microsoft YaHei",sans-serif; font-size:var(--fs); line-height:var(--lh); }
   .wrap { max-width:760px; margin:0 auto; padding:0 18px 140px; }
   header.top { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:14px 18px; display:flex; align-items:center; justify-content:space-between; z-index:10; }
   header.top .t { font-size:20px; font-weight:700; }
@@ -43,7 +44,10 @@
 <body>
 <header class="top">
   <span class="t" id="topTitle">银发 AI 互动小说</span>
-  <button class="mode-btn" id="fontBtn">字号 A+</button>
+  <span>
+    <button class="mode-btn" id="modeBtn" onclick="toggleMode()">标准版</button>
+    <button class="mode-btn" id="fontBtn">字号 A+</button>
+  </span>
 </header>
 <div class="wrap" id="app"><div class="loading">加载中…</div></div>
 
@@ -61,19 +65,68 @@ document.getElementById('fontBtn').onclick = () => {
 async function api(path){ const r = await fetch(API+path); const j = await r.json(); if(j.code!==0) throw new Error(j.msg); return j.data; }
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
+// 设备标识（内测期即账号）
+function deviceId(){ let id=localStorage.getItem('device_id'); if(!id){ id='dev-'+Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('device_id',id);} return id; }
+// 模式：拉取配置并应用
+async function applyMode(){
+  try{
+    const d = await api('/user/mode?device_id='+deviceId());
+    state.mode = d.mode; applyModeCfg(d.config);
+    document.getElementById('modeBtn').textContent = d.mode==='care'?'关怀版':'标准版';
+  }catch(e){}
+}
+function applyModeCfg(cfg){
+  document.documentElement.style.setProperty('--fs', cfg.font_size+'px');
+  document.documentElement.style.setProperty('--lh', cfg.line_height||2.0);
+}
+async function toggleMode(){
+  const next = state.mode==='care'?'standard':'care';
+  try{
+    const resp = await fetch(API+'/user/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:deviceId(),mode:next})});
+    const j = await resp.json();
+    if(j.code===0){ state.mode=j.data.mode; applyModeCfg(j.data.config); document.getElementById('modeBtn').textContent = next==='care'?'关怀版':'标准版'; }
+  }catch(e){}
+}
+// 进度上报（切章时）
+async function reportProgress(bookId, no, pos){
+  try{ await fetch(API+'/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:deviceId(),book_id:bookId,chapter_no:no,position:pos||0})}); }catch(e){}
+}
+
 // 首页
 async function showHome(){
   state.view='home'; stopAudio();
   document.getElementById('topTitle').textContent='银发 AI 互动小说';
   try{
-    const d = await api('/home');
+    const d = await api('/home?device_id='+deviceId());
     if(!d.books.length){ app.innerHTML='<div class="err">暂无已上架作品</div>'; return; }
-    app.innerHTML = d.books.map(b=>`
+    let html = `<div style="padding:14px 0"><input id="q" placeholder="搜书名 / 章节" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:19px;padding:14px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
+    if(d.resume){ html += `<div class="toc-item" style="background:var(--hl);border-radius:10px;margin-bottom:10px" onclick="openChapter(${d.resume.book_id},${d.resume.chapter_no})">▶ 续读《${esc(d.resume.title)}》第 ${d.resume.chapter_no} 章</div>`; }
+    if(d.featured && d.featured.length){ html += `<div style="font-size:16px;color:var(--muted);margin:6px 0">精选</div>` + d.featured.map(b=>`
+      <div class="toc-item" style="background:var(--bg2);border-radius:10px;margin-bottom:8px" onclick="openBook(${b.id})">
+        <b>${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
+        <div style="font-size:15px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
+      </div>`).join(''); }
+    html += d.books.map(b=>`
       <div class="toc-item" onclick="openBook(${b.id})">
         <b>${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
-        <div style="font-size:16px;color:var(--muted)">共 ${b.total_chapters} 章 · ${esc((b.intro||'').slice(0,40))}</div>
+        <div style="font-size:16px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章 · ${esc((b.intro||'').slice(0,40))}</div>
       </div>`).join('');
+    app.innerHTML = html;
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+// 搜索
+async function doSearch(){
+  const q = document.getElementById('q').value.trim(); if(!q) return;
+  try{
+    const d = await api('/search?q='+encodeURIComponent(q));
+    let html = `<div style="padding:14px 0"><input id="q" value="${esc(q)}" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:19px;padding:14px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
+    html += `<div style="font-size:16px;color:var(--muted)">搜索"${esc(q)}"</div>`;
+    if(d.books.length) html += d.books.map(b=>`<div class="toc-item" onclick="openBook(${b.id})"><b>${esc(b.title)}</b></div>`).join('');
+    if(d.chapters.length) html += d.chapters.map(c=>`<div class="toc-item" onclick="openChapter(${c.book_id},${c.no})">${esc(c.title||('第'+c.no+'章'))}</div>`).join('');
+    if(!d.books.length && !d.chapters.length) html += '<div class="err">没有找到相关内容</div>';
+    app.innerHTML = html;
+  }catch(e){ app.innerHTML='<div class="err">搜索失败</div>'; }
 }
 
 // 作品目录
@@ -124,6 +177,7 @@ async function openChapter(bid,no){
     window.scrollTo(0,0);
     if(c.audio_url) setupAudio(c);
     loadInteract(c.chapter_id);
+    reportProgress(bid, no, 0);
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }
 
@@ -178,7 +232,8 @@ function highlight(ms){
 }
 function clearHl(){ document.querySelectorAll('.para').forEach(p=>p.classList.remove('active')); }
 function nav(d){ const c=state.chapter; openChapter(c.book_id, c.no+d); }
-window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose;
+window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose; window.doSearch=doSearch; window.toggleMode=toggleMode;
+applyMode();
 showHome();
 </script>
 </body>

@@ -6,21 +6,43 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..core.response import ok, BizError, ERR_NOT_FOUND
-from ..models import Book, Chapter
+from ..models import Book, Chapter, Theme, User, ReadProgress
 
 router = APIRouter(prefix="/api/v1", tags=["c-read"])
 
 
 def _book_card(b: Book):
     return {"id": b.id, "title": b.title, "intro": b.intro,
-            "total_chapters": b.total_chapters, "ai_label": b.ai_label}
+            "total_chapters": b.total_chapters, "ai_label": b.ai_label,
+            "theme": b.theme.name if b.theme else ""}
 
 
 @router.get("/home")
-def home(db: Session = Depends(get_db)):
-    """首页聚合：已上架书卡流。"""
+def home(device_id: str = "", db: Session = Depends(get_db)):
+    """首页聚合：精选轮播 + 频道 + 书卡流 + 续读。"""
     rows = db.query(Book).filter(Book.status == "on_shelf").all()
-    return ok({"books": [_book_card(b) for b in rows]})
+    # 精选轮播：取最新上架的
+    featured = [_book_card(b) for b in rows[:3]]
+    # 频道：按题材分组
+    channels = {}
+    for b in rows:
+        t = b.theme.name if b.theme else "其他"
+        channels.setdefault(t, []).append(_book_card(b))
+    channel_list = [{"name": k, "books": v} for k, v in channels.items()]
+    # 续读
+    resume = None
+    if device_id:
+        u = db.query(User).filter_by(device_id=device_id).first()
+        if u:
+            p = (db.query(ReadProgress).filter_by(user_id=u.id)
+                 .order_by(ReadProgress.updated_at.desc()).first())
+            if p:
+                b = db.get(Book, p.book_id)
+                if b and b.status == "on_shelf":
+                    resume = {"book_id": b.id, "title": b.title,
+                              "chapter_no": p.chapter_no}
+    return ok({"featured": featured, "channels": channel_list,
+               "books": [_book_card(b) for b in rows], "resume": resume})
 
 
 @router.get("/books/{bid}")

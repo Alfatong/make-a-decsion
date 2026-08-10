@@ -92,3 +92,24 @@ class InteractNode(Base):
     responses = Column(JSON, default=dict)                 # {"0": "回响段A", "1": "回响段B"}（缓存）
     position = Column(Integer, default=0)                  # 出现位置（第几段后）
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class User(Base):
+    """C 端用户（内测期简化：设备标识即账号）"""
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(64), unique=True, nullable=False)  # 内测期设备即用户
+    mode = Column(String(16), default="standard")                # standard|care（关怀）
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ReadProgress(Base):
+    """阅读进度（服务端为跨端准绳，按用户+书唯一）"""
+    __tablename__ = "read_progress"
+    __table_args__ = (UniqueConstraint("user_id", "book_id", name="uq_user_book_progress"),)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    book_id = Column(Integer, ForeignKey("books.id"))
+    chapter_no = Column(Integer, default=1)                # 读到第几章
+    position = Column(Integer, default=0)                  # 章内位置（段索引或偏移）
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

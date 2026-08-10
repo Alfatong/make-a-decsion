@@ -10,6 +10,7 @@ from .db import Base, engine
 from .api import content as content_api
 from .api import read as read_api
 from .api import interact as interact_api
+from .api import user as user_api
 
 app = FastAPI(title="银发 AI 互动小说 API", version="0.2.0")
 
@@ -50,3 +51,4 @@ def info():
 app.include_router(content_api.router)
 app.include_router(read_api.router)
 app.include_router(interact_api.router)
+app.include_router(user_api.router)
