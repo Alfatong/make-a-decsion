@@ -10,12 +10,14 @@ from datetime import datetime
 import os
 
 from ..db import get_db, Base, engine
-from ..core.response import ok, err, BizError, ERR_NOT_FOUND, ERR_REVIEW
+from ..core.response import ok, BizError, ERR_NOT_FOUND, ERR_REVIEW
 from ..models import Theme, Book, Chapter, GenTask, ReviewRecord
 from ..services.content.pipeline import ContentPipeline
 from ..services.moderation.review import ReviewService
+from .admin_auth import verify_admin
 
-router = APIRouter(prefix="/admin/api", tags=["admin-content"])
+router = APIRouter(prefix="/admin/api", tags=["admin-content"],
+                   dependencies=[Depends(verify_admin)])
 
 
 # ---------- 题材模板 ----------
@@ -178,8 +180,30 @@ def review_queue(db: Session = Depends(get_db)):
     rows = db.query(Chapter).filter(Chapter.review_status.in_(
         ["machine_hit", "pending"])).all()
     return ok([{"chapter_id": c.id, "book_id": c.book_id, "no": c.no,
+                "title": c.title, "word_count": c.word_count,
+                "book_title": c.book.title if c.book else "",
                 "review_status": c.review_status, "label": c.review_label,
                 "conflicts": c.consistency_conflicts} for c in rows])
+
+
+@router.get("/chapters/{cid}")
+def chapter_detail(cid: int, db: Session = Depends(get_db)):
+    """审核台章节详情：正文 + 机审记录。"""
+    ch = db.get(Chapter, cid)
+    if not ch:
+        raise BizError(ERR_NOT_FOUND, "章节不存在")
+    records = (db.query(ReviewRecord).filter_by(chapter_id=cid)
+               .order_by(ReviewRecord.id.desc()).limit(10).all())
+    return ok({
+        "chapter_id": ch.id, "book_id": ch.book_id, "no": ch.no,
+        "title": ch.title, "content": ch.content, "word_count": ch.word_count,
+        "review_status": ch.review_status, "label": ch.review_label,
+        "conflicts": ch.consistency_conflicts,
+        "records": [{"stage": r.stage, "action": r.action, "label": r.label,
+                     "detail": r.detail,
+                     "created_at": r.created_at.isoformat() if r.created_at else ""}
+                    for r in records],
+    })
 
 
 class ManualReviewIn(BaseModel):
@@ -214,3 +238,13 @@ def shelf_book(bid: int, db: Session = Depends(get_db)):
         raise BizError(ERR_REVIEW, f"以下章节未通过审核: {not_passed}")
     b.status = "on_shelf"; db.commit()
     return ok({"book_id": bid, "status": "on_shelf"})
+
+
+@router.post("/books/{bid}/off-shelf")
+def off_shelf_book(bid: int, db: Session = Depends(get_db)):
+    """整书下架。"""
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    b.status = "off_shelf"; db.commit()
+    return ok({"book_id": bid, "status": "off_shelf"})

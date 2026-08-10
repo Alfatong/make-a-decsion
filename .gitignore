@@ -1,29 +1,7 @@
-# 依赖与环境
+node_modules/
+dist/
 __pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-env/
-
-# 环境与密钥（绝不提交）
+*.pyc
 .env
-.env.*
-!.env.example
-
-# 数据与产物
-*.db
-*.sqlite3
-*.mp3
-*.wav
-backend/data/
-output/
-out/
-
-# 系统
-.DS_Store
-Thumbs.db
-
-# IDE
-.idea/
-.vscode/
+_test_local.db
+_t.db
