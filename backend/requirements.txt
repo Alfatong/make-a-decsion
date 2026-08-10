@@ -14,8 +14,8 @@ qdrant-client==1.11.0
 # 任务队列
 celery==5.4.0
 
-# LLM / 腾讯云（用最小版本约束，避免锁定不存在的版本）
-openai==1.51.0
+# LLM / 腾讯云（openai 需 >=1.55 以兼容新版 httpx 移除的 proxies 参数）
+openai>=1.55.0
 tencentcloud-sdk-python-tts>=3.0.1400
 tencentcloud-sdk-python-tms>=3.0.1400
 cos-python-sdk-v5==1.9.30

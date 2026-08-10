@@ -106,6 +106,25 @@ def book_detail(bid: int, db: Session = Depends(get_db)):
 
 
 # ---------- 审核 ----------
+class GenChapterIn(BaseModel):
+    book_id: int
+    no: int
+
+
+@router.post("/gen-chapter")
+def gen_chapter(body: GenChapterIn, db: Session = Depends(get_db)):
+    """单章生成（走记忆层一致性校验）。"""
+    pipe = ContentPipeline(db)
+    try:
+        ch = pipe.generate_chapter(body.book_id, body.no)
+    except ValueError as e:
+        raise BizError(ERR_NOT_FOUND, str(e))
+    except Exception as e:  # noqa
+        raise BizError(5000, f"章节生成失败: {e}")
+    return ok({"chapter_id": ch.id, "no": ch.no, "word_count": ch.word_count,
+               "conflicts": ch.consistency_conflicts})
+
+
 @router.post("/chapters/{cid}/machine-review")
 def machine_review(cid: int, db: Session = Depends(get_db)):
     ch = db.get(Chapter, cid)
@@ -157,10 +176,13 @@ def manual_review(cid: int, body: ManualReviewIn, db: Session = Depends(get_db))
 
 @router.post("/books/{bid}/shelf")
 def shelf_book(bid: int, db: Session = Depends(get_db)):
-    """整书上架：要求所有章节过了机审且人工通过。"""
+    """整书上架：要求章节数齐整 + 所有章节过了机审且人工通过。"""
     b = db.get(Book, bid)
     if not b:
         raise BizError(ERR_NOT_FOUND, "书不存在")
+    if len(b.chapters) < b.total_chapters:
+        raise BizError(ERR_REVIEW,
+                       f"章节未生成齐整：{len(b.chapters)}/{b.total_chapters}")
     not_passed = [c.no for c in b.chapters if c.review_status != "manual_pass"]
     if not_passed:
         raise BizError(ERR_REVIEW, f"以下章节未通过审核: {not_passed}")
