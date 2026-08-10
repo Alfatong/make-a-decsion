@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>银发 AI 互动小说</title>
+<style>
+  :root {
+    --bg: #FBF7F0; --bg2: #F4EDE1; --ink: #2E2A25; --muted: #7C7266;
+    --accent: #B3541E; --accent2: #3F6C51; --hl: #FFE9B0; --rule: #E3D9C8;
+    --fs: 22px; /* 适老大字号 */
+  }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { background:var(--bg); color:var(--ink); font-family:"PingFang SC","Microsoft YaHei",sans-serif; font-size:var(--fs); line-height:2.0; }
+  .wrap { max-width:760px; margin:0 auto; padding:0 18px 140px; }
+  header.top { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:14px 18px; display:flex; align-items:center; justify-content:space-between; z-index:10; }
+  header.top .t { font-size:20px; font-weight:700; }
+  header.top .mode-btn { font-size:16px; background:var(--bg2); border:1px solid var(--rule); border-radius:8px; padding:6px 12px; color:var(--muted); }
+  .ai-tag { display:inline-block; font-size:13px; background:var(--bg2); color:var(--muted); border:1px solid var(--rule); border-radius:99px; padding:2px 10px; margin-left:8px; vertical-align:middle; }
+  h1.book { font-size:26px; margin:24px 0 6px; }
+  .toc-item { padding:16px 8px; border-bottom:1px solid var(--rule); font-size:20px; cursor:pointer; }
+  .toc-item:active { background:var(--bg2); }
+  .chapter-title { font-size:24px; font-weight:700; margin:22px 0 14px; text-align:center; }
+  .para { margin-bottom:1.1em; text-align:justify; padding:2px 4px; border-radius:6px; transition:background 0.2s; }
+  .para.active { background:var(--hl); }
+  .interact { background:var(--bg2); border:1px solid var(--rule); border-radius:12px; padding:18px; margin:22px 0; }
+  .interact .q { font-size:20px; font-weight:700; margin-bottom:12px; color:var(--accent2); }
+  .opt { display:block; width:100%; text-align:left; font-size:20px; padding:16px; margin:10px 0; background:#fff; border:2px solid var(--rule); border-radius:10px; cursor:pointer; }
+  .opt:active { border-color:var(--accent2); background:#EAF3EE; }
+  .resp { margin-top:14px; padding:14px; background:#fff; border-left:4px solid var(--accent2); border-radius:0 8px 8px 0; font-size:19px; }
+  /* 底部控制条 */
+  .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--rule); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; z-index:20; }
+  .bar button { flex:1; font-size:19px; padding:14px 8px; border-radius:10px; border:1px solid var(--rule); background:var(--bg2); color:var(--ink); }
+  .bar button.primary { background:var(--accent2); color:#fff; border-color:var(--accent2); }
+  .bar button:disabled { opacity:0.4; }
+  .speed { display:flex; gap:4px; }
+  .speed button { flex:none; font-size:15px; padding:10px 10px; }
+  .speed button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .loading { text-align:center; color:var(--muted); padding:60px 0; font-size:20px; }
+  .err { text-align:center; color:var(--accent); padding:40px 0; font-size:19px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="t" id="topTitle">银发 AI 互动小说</span>
+  <button class="mode-btn" id="fontBtn">字号 A+</button>
+</header>
+<div class="wrap" id="app"><div class="loading">加载中…</div></div>
+
+<script>
+const API = '/api/v1';
+let state = { view:'home', book:null, chapter:null, fontSize:22, audio:null, playing:false, speed:1.0, segIdx:-1 };
+const app = document.getElementById('app');
+
+// 字号切换（适老）
+document.getElementById('fontBtn').onclick = () => {
+  state.fontSize = state.fontSize >= 28 ? 22 : state.fontSize + 2;
+  document.documentElement.style.setProperty('--fs', state.fontSize + 'px');
+};
+
+async function api(path){ const r = await fetch(API+path); const j = await r.json(); if(j.code!==0) throw new Error(j.msg); return j.data; }
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+// 首页
+async function showHome(){
+  state.view='home'; stopAudio();
+  document.getElementById('topTitle').textContent='银发 AI 互动小说';
+  try{
+    const d = await api('/home');
+    if(!d.books.length){ app.innerHTML='<div class="err">暂无已上架作品</div>'; return; }
+    app.innerHTML = d.books.map(b=>`
+      <div class="toc-item" onclick="openBook(${b.id})">
+        <b>${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
+        <div style="font-size:16px;color:var(--muted)">共 ${b.total_chapters} 章 · ${esc((b.intro||'').slice(0,40))}</div>
+      </div>`).join('');
+  }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+// 作品目录
+async function openBook(id){
+  state.view='book'; stopAudio();
+  try{
+    const b = await api('/books/'+id);
+    state.book=b;
+    document.getElementById('topTitle').textContent=b.title;
+    app.innerHTML = `<h1 class="book">${esc(b.title)}<span class="ai-tag">AI 创作</span></h1>
+      <div style="color:var(--muted);font-size:16px;margin-bottom:14px">共 ${b.total_chapters} 章</div>
+      ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
+    window.scrollTo(0,0);
+  }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+// 章节阅读 + 听书
+async function openChapter(bid,no){
+  state.view='chapter'; stopAudio();
+  try{
+    const c = await api(`/books/${bid}/chapters/${no}`);
+    state.chapter=c;
+    document.getElementById('topTitle').textContent=state.book?state.book.title:'阅读';
+    const paras = c.content.split(/\n+/).filter(p=>p.trim());
+    const segs = c.tts_segments||[];
+    app.innerHTML = `
+      <div class="chapter-title">${esc(c.title)}</div>
+      <div id="content">
+        ${paras.map((p,i)=>`<p class="para" data-i="${i}">${esc(p)}</p>`).join('')}
+      </div>
+      <div class="interact" id="interact">
+        <div class="q">读到这儿，你想怎么发展？</div>
+        <button class="opt" onclick="choose(0)">平平淡淡，接着往下过</button>
+        <button class="opt" onclick="choose(1)">来点波折，添些看头</button>
+        <div class="resp" id="resp" style="display:none"></div>
+      </div>
+      <div class="bar">
+        <button onclick="nav(-1)" ${c.has_prev?'':'disabled'}>‹ 上一章</button>
+        ${c.audio_url?`<button class="primary" id="playBtn" onclick="togglePlay()">▶ 听书</button>`
+                     :`<button disabled>无音频</button>`}
+        <button onclick="nav(1)" ${c.has_next?'':'disabled'}>下一章 ›</button>
+      </div>
+      ${c.audio_url?`<div class="bar" style="bottom:70px"><div class="speed" style="margin:0 auto">
+        <button data-s="0.75" onclick="setSpeed(0.75,this)">0.75x</button>
+        <button data-s="1.0" class="on" onclick="setSpeed(1.0,this)">1.0x</button>
+        <button data-s="1.25" onclick="setSpeed(1.25,this)">1.25x</button>
+      </div></div>`:''}
+    `;
+    window.scrollTo(0,0);
+    if(c.audio_url) setupAudio(c);
+  }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+function setupAudio(c){
+  state.audio = new Audio(c.audio_url);
+  state.audio.playbackRate = state.speed;
+  state.audio.ontimeupdate = ()=>highlight(state.audio.currentTime*1000);
+  state.audio.onended = ()=>{ state.playing=false; updatePlayBtn(); clearHl(); };
+}
+function togglePlay(){
+  if(!state.audio) return;
+  if(state.playing){ state.audio.pause(); state.playing=false; }
+  else{ state.audio.play(); state.playing=true; }
+  updatePlayBtn();
+}
+function updatePlayBtn(){ const b=document.getElementById('playBtn'); if(b) b.textContent = state.playing?'⏸ 暂停':'▶ 听书'; }
+function setSpeed(s,btn){ state.speed=s; if(state.audio) state.audio.playbackRate=s; document.querySelectorAll('.speed button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); }
+function stopAudio(){ if(state.audio){ state.audio.pause(); state.audio=null; } state.playing=false; state.segIdx=-1; }
+function highlight(ms){
+  const segs = state.chapter.tts_segments||[]; if(!segs.length) return;
+  let idx=-1;
+  for(let i=0;i<segs.length;i++){ if(ms>=segs[i].start_ms && ms<segs[i].end_ms){ idx=i; break; } }
+  if(idx===state.segIdx) return; state.segIdx=idx;
+  document.querySelectorAll('.para').forEach(p=>p.classList.remove('active'));
+  if(idx>=0){ const el=document.querySelector(`.para[data-i="${idx}"]`); if(el){ el.classList.add('active'); el.scrollIntoView({block:'center',behavior:'smooth'}); } }
+}
+function clearHl(){ document.querySelectorAll('.para').forEach(p=>p.classList.remove('active')); }
+function nav(d){ const c=state.chapter; openChapter(c.book_id, c.no+d); }
+function choose(i){
+  const r=document.getElementById('resp'); r.style.display='block';
+  r.textContent = i===0 ? '好，日子就该这样，安安稳稳。' : '行，给你添点儿热闹，往下看。';
+}
+window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose;
+showHome();
+</script>
+</body>
+</html>
