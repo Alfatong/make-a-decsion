@@ -56,18 +56,39 @@ def book_intro(bid: int, db: Session = Depends(get_db)):
 
 
 @router.get("/books/{bid}/chapters/{no}")
-def chapter_read(bid: int, no: int, db: Session = Depends(get_db)):
-    """章节正文 + tts 段时间轴 + ai_label。"""
+def chapter_read(bid: int, no: int, device_id: str = "", db: Session = Depends(get_db)):
+    """章节正文 + tts 段时间轴 + ai_label + unlock 状态。"""
     b = db.get(Book, bid)
     if not b or b.status != "on_shelf":
         raise BizError(ERR_NOT_FOUND, "作品不存在或未上架")
     ch = next((c for c in b.chapters if c.no == no), None)
     if not ch or ch.review_status != "manual_pass":
         raise BizError(ERR_NOT_FOUND, "章节不存在或未过审")
+    # 锁章校验：免费章直接可读，付费章查权益
+    locked = False
+    if no > b.free_chapters:
+        unlocked = False
+        if device_id:
+            from ..models import Entitlement
+            u = db.query(User).filter_by(device_id=device_id).first()
+            if u:
+                for ent in db.query(Entitlement).filter_by(
+                        user_id=u.id, book_id=bid, status="active").all():
+                    if ent.scope == "full" or (ent.scope == "chapter" and ent.chapter_no == no):
+                        unlocked = True; break
+        locked = not unlocked
+    if locked:
+        return ok({
+            "book_id": bid, "chapter_id": ch.id, "no": no,
+            "title": ch.title or f"第{no}章", "locked": True,
+            "free_chapters": b.free_chapters,
+            "price_cents": b.price_cents, "chapter_price_cents": b.chapter_price_cents,
+            "has_prev": no > 1, "has_next": no < b.total_chapters,
+        })
     return ok({
         "book_id": bid, "chapter_id": ch.id, "no": no, "title": ch.title or f"第{no}章",
         "content": ch.content, "word_count": ch.word_count,
-        "ai_label": b.ai_label,
+        "ai_label": b.ai_label, "locked": False,
         "tts_segments": ch.tts_segments or [],
         "audio_url": f"/audio/ch{ch.id}.mp3" if ch.tts_segments else None,
         "has_prev": no > 1,

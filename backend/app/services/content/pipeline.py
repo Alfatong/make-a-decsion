@@ -18,6 +18,13 @@ from ..tts.synthesizer import ChapterTTS, TTSError
 logger = logging.getLogger(__name__)
 
 OUTLINE_SYS = "你是长篇小说策划编辑，擅长老年年代题材，输出结构化大纲。"
+INTRO_SYS = "你是小说编辑，擅长写给老年读者看的作品简介，朴实有吸引力。"
+INTRO_TMPL = """为长篇小说《{title}》写一段 60-100 字的作品简介。
+
+【全书大纲】
+{outline}
+
+要求：口语化、有画面感，突出人物和年代烟火气，让老年读者一看就想点进去读。不要剧透结局，不要用"本书讲述了"开头。直接输出简介正文。"""
 OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作全书大纲（共{n}章）。
 
 【题材模板】
@@ -58,7 +65,17 @@ class ContentPipeline:
         prompt = OUTLINE_TMPL.format(title=title, n=n, theme_prompt=theme.prompt_template)
         r = self.adapter.generate(prompt, model=settings.LLM_MODEL_OUTLINE,
                                   system=OUTLINE_SYS, max_tokens=6000, temperature=0.7)
-        book = Book(theme_id=theme_id, title=title, outline=r.text,
+        # 生成作品简介
+        intro = ""
+        try:
+            ri = self.adapter.generate(
+                INTRO_TMPL.format(title=title, outline=r.text[:2000]),
+                model=settings.LLM_MODEL_CHAPTER, system=INTRO_SYS,
+                max_tokens=300, temperature=0.7)
+            intro = ri.text.strip()
+        except Exception as e:  # noqa
+            logger.warning("简介生成失败: %s", e)
+        book = Book(theme_id=theme_id, title=title, intro=intro, outline=r.text,
                     status="draft", total_chapters=n, ai_label=True)
         self.db.add(book); self.db.commit(); self.db.refresh(book)
         logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(r.text))

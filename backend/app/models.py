@@ -31,6 +31,9 @@ class Book(Base):
     status = Column(String(16), default="draft")          # draft|generating|reviewing|on_shelf|off_shelf
     total_chapters = Column(Integer, default=0)
     ai_label = Column(Boolean, default=True)              # AI 生成标识（合规必须）
+    free_chapters = Column(Integer, default=5)            # 免费章数
+    price_cents = Column(Integer, default=199)            # 整书买断价（分）
+    chapter_price_cents = Column(Integer, default=10)     # 单章价（分）
     created_at = Column(DateTime, default=datetime.utcnow)
     theme = relationship("Theme", back_populates="books")
     chapters = relationship("Chapter", back_populates="book", order_by="Chapter.no")
@@ -113,3 +116,33 @@ class ReadProgress(Base):
     chapter_no = Column(Integer, default=1)                # 读到第几章
     position = Column(Integer, default=0)                  # 章内位置（段索引或偏移）
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Order(Base):
+    """订单（管钱）。状态机：pending→paid→refunding→refunded"""
+    __tablename__ = "orders"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_order_idem"),)
+    id = Column(Integer, primary_key=True)
+    order_no = Column(String(32), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    book_id = Column(Integer, ForeignKey("books.id"))
+    order_type = Column(String(16), nullable=False)        # buyout|chapter
+    chapter_no = Column(Integer, nullable=True)            # 按章解锁时的章号
+    amount_cents = Column(Integer, nullable=False)
+    status = Column(String(16), default="pending")         # pending|paid|refunding|refunded
+    idempotency_key = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    paid_at = Column(DateTime, nullable=True)
+
+
+class Entitlement(Base):
+    """权益（管访问权）。订单 paid → 幂等发放；退款 → frozen→revoked"""
+    __tablename__ = "entitlements"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    book_id = Column(Integer, ForeignKey("books.id"))
+    scope = Column(String(16), nullable=False)             # full|chapter
+    chapter_no = Column(Integer, nullable=True)
+    status = Column(String(16), default="active")          # active|frozen|revoked
+    order_id = Column(Integer, ForeignKey("orders.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)

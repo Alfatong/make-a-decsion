@@ -38,6 +38,22 @@
   .speed button { flex:none; font-size:15px; padding:10px 10px; }
   .speed button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
   .loading { text-align:center; color:var(--muted); padding:60px 0; font-size:20px; }
+  /* 加载遮罩（章节切换反馈） */
+  .mask { position:fixed; inset:0; background:rgba(251,247,240,0.92); z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .mask .spin { width:46px; height:46px; border:5px solid var(--rule); border-top-color:var(--accent2); border-radius:50%; animation:rot 0.9s linear infinite; }
+  .mask .txt { margin-top:18px; font-size:20px; color:var(--muted); }
+  @keyframes rot { to { transform:rotate(360deg); } }
+  /* 锁章 / 收银台 */
+  .lock-box { text-align:center; padding:50px 20px; }
+  .lock-box .icon { font-size:52px; }
+  .lock-box .tip { font-size:20px; color:var(--muted); margin:16px 0 24px; }
+  .pay-btn { display:block; width:100%; font-size:21px; padding:16px; margin:12px 0; border-radius:12px; border:none; cursor:pointer; }
+  .pay-btn.buy { background:var(--accent); color:#fff; }
+  .pay-btn.ch { background:var(--bg2); color:var(--ink); border:2px solid var(--rule); }
+  .cashier { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:60; display:flex; align-items:flex-end; }
+  .cashier .panel { background:#fff; width:100%; border-radius:16px 16px 0 0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); }
+  .cashier .amt { font-size:34px; font-weight:700; color:var(--accent); text-align:center; margin:10px 0 20px; }
+  .cashier .row { display:flex; gap:10px; }
   .err { text-align:center; color:var(--accent); padding:40px 0; font-size:19px; }
 </style>
 </head>
@@ -105,11 +121,13 @@ async function showHome(){
       <div class="toc-item" style="background:var(--bg2);border-radius:10px;margin-bottom:8px" onclick="openBook(${b.id})">
         <b>${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
         <div style="font-size:15px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
+        ${b.intro?`<div style="font-size:17px;color:var(--ink);margin-top:6px;line-height:1.7">${esc(b.intro)}</div>`:''}
       </div>`).join(''); }
     html += d.books.map(b=>`
       <div class="toc-item" onclick="openBook(${b.id})">
         <b>${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
-        <div style="font-size:16px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章 · ${esc((b.intro||'').slice(0,40))}</div>
+        <div style="font-size:16px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
+        ${b.intro?`<div style="font-size:17px;margin-top:6px;line-height:1.7">${esc(b.intro)}</div>`:''}
       </div>`).join('');
     app.innerHTML = html;
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
@@ -138,18 +156,76 @@ async function openBook(id){
     document.getElementById('topTitle').textContent=b.title;
     app.innerHTML = `<h1 class="book">${esc(b.title)}<span class="ai-tag">AI 创作</span></h1>
       <div style="color:var(--muted);font-size:16px;margin-bottom:14px">共 ${b.total_chapters} 章</div>
+      ${b.intro?`<div style="font-size:19px;background:var(--bg2);border-radius:10px;padding:16px;margin-bottom:14px;line-height:1.9">${esc(b.intro)}</div>`:''}
       ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
     window.scrollTo(0,0);
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }
 
+// 模拟收银台
+function startPay(bid, no, type, cents){
+  const label = type==='buyout' ? '买断全本' : '解锁第 '+no+' 章';
+  const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
+  el.innerHTML = `<div class="panel">
+    <div style="font-size:20px;text-align:center;color:var(--muted)">${label}</div>
+    <div class="amt">¥${(cents/100).toFixed(2)}</div>
+    <div style="font-size:15px;color:var(--muted);text-align:center;margin-bottom:16px">内测模拟支付，不产生真实扣费</div>
+    <div class="row">
+      <button class="pay-btn ch" style="flex:1" onclick="closeCashier()">取消</button>
+      <button class="pay-btn buy" style="flex:2" onclick="doPay(${bid},${no},'${type}')">确认支付</button>
+    </div></div>`;
+  document.body.appendChild(el);
+}
+function closeCashier(){ const e=document.getElementById('cashier'); if(e) e.remove(); }
+async function doPay(bid, no, type){
+  closeCashier(); showMask('支付中…');
+  try{
+    const idem = deviceId()+'-'+bid+'-'+type+'-'+(type==='chapter'?no:'full');
+    const r1 = await fetch(API+'/orders',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({device_id:deviceId(),book_id:bid,order_type:type,chapter_no:type==='chapter'?no:null,idempotency_key:idem})});
+    const j1 = await r1.json();
+    if(j1.code!==0) throw new Error(j1.msg);
+    const r2 = await fetch(API+'/orders/'+j1.data.order_id+'/mock-pay',{method:'POST'});
+    const j2 = await r2.json();
+    if(j2.code!==0) throw new Error(j2.msg);
+    hideMask();
+    openChapter(bid, no);  // 支付成功，重新加载本章
+  }catch(e){ hideMask(); alert(e.message||'支付失败'); }
+}
+
+// 加载遮罩
+function showMask(txt){  hideMask();
+  const m=document.createElement('div'); m.className='mask'; m.id='mask';
+  m.innerHTML=`<div class="spin"></div><div class="txt">${txt||'加载中…'}</div>`;
+  document.body.appendChild(m);
+}
+function hideMask(){ const m=document.getElementById('mask'); if(m) m.remove(); }
+
 // 章节阅读 + 听书
 async function openChapter(bid,no){
   state.view='chapter'; stopAudio();
+  showMask('正在翻到第 '+no+' 章…');
   try{
-    const c = await api(`/books/${bid}/chapters/${no}`);
+    const c = await api(`/books/${bid}/chapters/${no}?device_id=`+deviceId());
     state.chapter=c;
     document.getElementById('topTitle').textContent=state.book?state.book.title:'阅读';
+    // 锁章：展示解锁页
+    if(c.locked){
+      hideMask();
+      app.innerHTML = `
+        <div class="chapter-title">${esc(c.title)}</div>
+        <div class="lock-box">
+          <div class="icon">🔒</div>
+          <div class="tip">本章起为付费内容<br>前 ${c.free_chapters} 章已免费读完</div>
+          <button class="pay-btn buy" onclick="startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
+          <button class="pay-btn ch" onclick="startPay(${bid},${no},'chapter',${c.chapter_price_cents})">仅解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
+        </div>
+        <div class="bar">
+          <button onclick="nav(-1)" ${c.has_prev?'':'disabled'}>‹ 上一章</button>
+          <button onclick="showHome()">回首页</button>
+        </div>`;
+      return;
+    }
     const paras = c.content.split(/\n+/).filter(p=>p.trim());
     const segs = c.tts_segments||[];
     app.innerHTML = `
@@ -178,7 +254,8 @@ async function openChapter(bid,no){
     if(c.audio_url) setupAudio(c);
     loadInteract(c.chapter_id);
     reportProgress(bid, no, 0);
-  }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+    hideMask();
+  }catch(e){ hideMask(); app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }
 
 // 互动：拉取真实节点（提问+选项）
@@ -232,7 +309,7 @@ function highlight(ms){
 }
 function clearHl(){ document.querySelectorAll('.para').forEach(p=>p.classList.remove('active')); }
 function nav(d){ const c=state.chapter; openChapter(c.book_id, c.no+d); }
-window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose; window.doSearch=doSearch; window.toggleMode=toggleMode;
+window.openBook=openBook; window.openChapter=openChapter; window.togglePlay=togglePlay; window.setSpeed=setSpeed; window.nav=nav; window.choose=choose; window.doSearch=doSearch; window.toggleMode=toggleMode; window.startPay=startPay; window.doPay=doPay; window.closeCashier=closeCashier;
 applyMode();
 showHome();
 </script>
