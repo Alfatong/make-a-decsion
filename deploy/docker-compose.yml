@@ -8,6 +8,8 @@ services:
     env_file: ../.env
     ports:
       - "127.0.0.1:8081:8000"   # 对外经系统 nginx 反代（80/443 被占用，故仅本机回环）
+    volumes:
+      - ./web:/opt/novel-app/deploy/web   # 音频/静态写入宿主机 web，供系统 nginx 托管
     environment:
       - APP_ENV=prod
       - DATABASE_URL=postgresql+psycopg2://novel:${POSTGRES_PASSWORD}@postgres:5432/novel

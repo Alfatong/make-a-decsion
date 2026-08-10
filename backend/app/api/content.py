@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
+import os
 
 from ..db import get_db, Base, engine
 from ..core.response import ok, err, BizError, ERR_NOT_FOUND, ERR_REVIEW
@@ -123,6 +124,31 @@ def gen_chapter(body: GenChapterIn, db: Session = Depends(get_db)):
         raise BizError(5000, f"章节生成失败: {e}")
     return ok({"chapter_id": ch.id, "no": ch.no, "word_count": ch.word_count,
                "conflicts": ch.consistency_conflicts})
+
+
+AUDIO_DIR = os.environ.get("AUDIO_DIR", "/opt/novel-app/deploy/web/audio")
+
+
+def _save_audio_local(chapter_id: int):
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    path = os.path.join(AUDIO_DIR, f"ch{chapter_id}.mp3")
+    def _upload(data: bytes, ext: str) -> str:
+        with open(path, "wb") as f:
+            f.write(data)
+        return f"/audio/ch{chapter_id}.{ext}"
+    return _upload
+
+
+@router.post("/chapters/{cid}/tts")
+def chapter_tts(cid: int, voice: int = 101002, db: Session = Depends(get_db)):
+    """章节 TTS 合成 + 时间轴入库 + 音频存静态目录（故障降级不阻塞阅读）。"""
+    pipe = ContentPipeline(db)
+    try:
+        r = pipe.synthesize_chapter_audio(cid, voice=voice,
+                                          upload=_save_audio_local(cid))
+    except ValueError as e:
+        raise BizError(ERR_NOT_FOUND, str(e))
+    return ok(r)
 
 
 @router.post("/chapters/{cid}/machine-review")

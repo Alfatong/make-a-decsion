@@ -13,6 +13,7 @@ from ..llm.adapter import LLMAdapter
 from ..memory.fact_store import FactStore
 from ..memory.checker import ConsistencyChecker, RuleChecker
 from ..memory.generator import ChapterGenerator
+from ..tts.synthesizer import ChapterTTS, TTSError
 
 logger = logging.getLogger(__name__)
 
@@ -109,3 +110,30 @@ class ContentPipeline:
             if s.startswith(f"第{no}章") or s.startswith(f"{no}."):
                 return s
         return f"第{no}章"
+
+    def synthesize_chapter_audio(self, chapter_id: int,
+                                 voice: int = 101002,
+                                 upload: Optional[callable] = None) -> Dict:
+        """章节 TTS 合成：分段合成 + 时间轴入库。
+        upload: 可选回调 (audio_bytes, ext)->url，用于上传 COS 并返回音频地址。
+        故障降级：TTS 失败不阻塞阅读，仅记录空时间轴。"""
+        ch = self.db.get(Chapter, chapter_id)
+        if not ch:
+            raise ValueError(f"章节 {chapter_id} 不存在")
+        try:
+            tts = ChapterTTS.from_env()
+            result = tts.synthesize_chapter(ch.content, voice=voice)
+        except TTSError as e:
+            logger.error("章节%d TTS 失败（降级仅阅读）: %s", chapter_id, e)
+            ch.tts_segments = []
+            self.db.commit()
+            return {"chapter_id": chapter_id, "tts_ok": False, "error": str(e)}
+        segments = [{"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
+                    for s in result.segments]
+        ch.tts_segments = segments
+        audio_url = upload(result.audio_bytes, "mp3") if upload else None
+        self.db.commit()
+        return {"chapter_id": chapter_id, "tts_ok": True,
+                "segments": len(segments), "duration_ms": result.duration_ms,
+                "failed_paragraphs": result.failed_paragraphs,
+                "audio_url": audio_url}
