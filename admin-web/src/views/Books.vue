@@ -28,20 +28,49 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="230">
+      <el-table-column label="操作" width="300">
         <template #default="{ row }">
+          <el-button v-if="row.status === 'draft'" type="primary" size="small"
+                     @click="openOutline(row)">编辑大纲</el-button>
           <el-button size="small" @click="reviewAll(row)">批量机审</el-button>
-          <el-button v-if="row.status !== 'on_shelf'" type="success" size="small"
+          <el-button v-if="row.status !== 'on_shelf' && row.status !== 'draft'" type="success" size="small"
                      :loading="acting" @click="shelf(row, true)">上架</el-button>
-          <el-button v-else type="warning" size="small"
+          <el-button v-if="row.status === 'on_shelf'" type="warning" size="small"
                      :loading="acting" @click="shelf(row, false)">下架</el-button>
         </template>
       </el-table-column>
     </el-table>
 
+    <el-dialog v-model="outlineDlg" title="大纲与简介（人工干预）" width="720px" top="4vh">
+      <el-alert type="warning" :closable="false" style="margin-bottom:12px"
+                title="逐章生成以大纲为准：改章节走向/角色表后再点开始生成。确认后不可再改。" />
+      <el-form label-width="90px">
+        <el-form-item label="书名">
+          <el-input v-model="outlineForm.title" disabled />
+        </el-form-item>
+        <el-form-item label="运营简介">
+          <el-input v-model="outlineForm.intro" type="textarea" :rows="3" maxlength="300" show-word-limit />
+        </el-form-item>
+        <el-form-item label="章数">
+          <el-input-number v-model="outlineForm.total_chapters" :min="5" :max="100" />
+        </el-form-item>
+        <el-form-item label="全书大纲">
+          <el-input v-model="outlineForm.outline" type="textarea" :rows="16"
+                    style="font-family:monospace" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="outlineDlg = false">取消</el-button>
+        <el-button :loading="savingOutline" @click="saveOutline">保存修改</el-button>
+        <el-button type="primary" :loading="starting" @click="saveAndGenerate">
+          保存并开始生成
+        </el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="dlg" title="新建书籍" width="520px">
       <el-alert type="info" :closable="false" style="margin-bottom:14px"
-                title="流程：选题材 → 生成大纲 → 后台逐章生成（约每章1-2分钟）→ 批量机审 → 审核队列复核 → 上架" />
+                title="流程：选题材建书 → 编辑大纲/简介（人工干预）→ 开始后台生成 → 批量机审 → 审核队列复核 → 上架" />
       <el-form label-width="90px">
         <el-form-item label="题材">
           <el-select v-model="form.theme_id" style="width:100%">
@@ -52,7 +81,6 @@
         <el-form-item label="章数">
           <el-input-number v-model="form.chapters" :min="5" :max="100" />
         </el-form-item>
-        <el-form-item label="立即生成"><el-switch v-model="form.auto_generate" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dlg = false">取消</el-button>
@@ -85,20 +113,52 @@ async function load() {
 async function loadThemes() { themes.value = await api.get('/themes') }
 
 function openCreate() {
-  form.value = { theme_id: themes.value[0]?.id, title: '', chapters: 30, auto_generate: true }
+  form.value = { theme_id: themes.value[0]?.id, title: '', chapters: 30 }
   dlg.value = true
 }
 async function create() {
   if (!form.value.title) { ElMessage.warning('请填书名'); return }
   creating.value = true
   try {
-    await api.post('/books', {
-      ...form.value,
+    const d = await api.post('/books', {
+      ...form.value, auto_generate: false,
       dedup_key: 'book-' + Date.now(),
     })
-    ElMessage.success('已创建，后台生成中（可看状态列）')
-    dlg.value = false; load()
+    ElMessage.success('大纲已生成，请先编辑大纲再开始生成')
+    dlg.value = false
+    await load()
+    openOutline({ id: d.book_id, title: form.value.title })
   } finally { creating.value = false }
+}
+
+// 大纲人工干预
+const outlineDlg = ref(false), savingOutline = ref(false), starting = ref(false)
+const outlineForm = ref({})
+async function openOutline(row) {
+  const d = await api.get('/books/' + row.id)
+  outlineForm.value = { id: d.id, title: d.title, intro: d.intro || '',
+                        outline: d.outline || '', total_chapters: d.total_chapters }
+  outlineDlg.value = true
+}
+async function saveOutline() {
+  savingOutline.value = true
+  try {
+    await api.put(`/books/${outlineForm.value.id}/outline`, {
+      outline: outlineForm.value.outline,
+      intro: outlineForm.value.intro,
+      total_chapters: outlineForm.value.total_chapters,
+    })
+    ElMessage.success('已保存')
+  } finally { savingOutline.value = false }
+}
+async function saveAndGenerate() {
+  await saveOutline()
+  starting.value = true
+  try {
+    await api.post(`/books/${outlineForm.value.id}/generate`, {})
+    ElMessage.success('已开始后台逐章生成，状态列会显示进度')
+    outlineDlg.value = false; load()
+  } finally { starting.value = false }
 }
 async function reviewAll(row) {
   const d = await api.post(`/books/${row.id}/machine-review-all`)

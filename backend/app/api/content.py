@@ -125,6 +125,49 @@ def list_gen_tasks(db: Session = Depends(get_db)):
                for t in rows])
 
 
+class OutlineEditIn(BaseModel):
+    outline: str
+    intro: Optional[str] = None
+    total_chapters: Optional[int] = None
+
+
+@router.put("/books/{bid}/outline")
+def edit_outline(bid: int, body: OutlineEditIn, db: Session = Depends(get_db)):
+    """人工干预：编辑全书大纲/简介（建书后、逐章生成前）。"""
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    if b.status not in ("draft",):
+        raise BizError(4003, f"当前状态 {b.status} 不可改大纲（仅草稿可改）")
+    b.outline = body.outline
+    if body.intro is not None:
+        b.intro = body.intro
+    if body.total_chapters:
+        b.total_chapters = body.total_chapters
+    db.commit()
+    return ok({"book_id": bid, "outline_len": len(b.outline)})
+
+
+class StartGenIn(BaseModel):
+    max_chapters: Optional[int] = None
+
+
+@router.post("/books/{bid}/generate")
+def start_generate(bid: int, body: StartGenIn, db: Session = Depends(get_db)):
+    """人工确认大纲后，手动触发后台逐章生成。"""
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    if b.status not in ("draft",):
+        raise BizError(4003, f"当前状态 {b.status} 不可启动生成")
+    task = GenTask(task_type="gen_book", dedup_key=f"gen-{bid}-{int(datetime.utcnow().timestamp())}",
+                   status="generating", payload={"book_id": bid})
+    db.add(task); db.commit(); db.refresh(task)
+    _bg_generate_book(task.id, bid, body.max_chapters)
+    b.status = "generating"; db.commit()
+    return ok({"book_id": bid, "task_id": task.id, "status": "generating"})
+
+
 @router.post("/books/{bid}/machine-review-all")
 def machine_review_all(bid: int, db: Session = Depends(get_db)):
     """全书批量机审：pending 章节走一遍 TMS，pass 的进人工复核队列。"""
