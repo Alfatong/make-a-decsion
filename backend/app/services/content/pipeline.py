@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 
 OUTLINE_SYS = "你是长篇小说策划编辑，擅长老年年代题材，输出结构化大纲。"
 INTRO_SYS = "你是小说编辑，擅长写给老年读者看的作品简介，朴实有吸引力。"
-INTRO_TMPL = """为长篇小说《{title}》写一段 60-100 字的作品简介。
+INTRO_TMPL = """为长篇小说《{title}》写一段 120-180 字的作品简介。
 
 【全书大纲】
 {outline}
 
-要求：口语化、有画面感，突出人物和年代烟火气，让老年读者一看就想点进去读。不要剧透结局，不要用"本书讲述了"开头。直接输出简介正文。"""
+要求：口语化、有画面感，突出主要人物、核心冲突和年代烟火气，让运营人员快速把握全书主题，也让老年读者一看就想点进去读。不要剧透结局，不要用"本书讲述了"开头。直接输出简介正文。"""
 OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作全书大纲（共{n}章）。
 
 【题材模板】
@@ -35,6 +35,37 @@ OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作�
 2. 再逐章列出章节标题与一句话情节（格式：第N章 标题 - 情节）
 3. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
 直接输出大纲文本。"""
+
+
+POLISH_SYS = "你是资深年代小说编辑，专治 AI 腔，改稿不动剧情。"
+POLISH_TMPL = """下面是长篇小说《{title}》第{no}章的初稿。请润色改写。
+
+【文风示范（学习这种感觉，不要照抄内容）】
+{style_sample}
+
+【润色要求】
+1. 剧情、人物、对话走向、事实细节一律不变，只做文字层面的打磨
+2. 删 AI 腔：慎用"仿佛/宛如/不禁/顿时/一股暖流"，能删就删；形容词堆叠处砍到只剩一个
+3. 长句拆短，一句话只说一件事；对话要短、要脆、要带人物脾气
+4. 每 300 字内补一处可感的细节：手上的动作、物件的质感、声响、气味、光线，从本章已有物件里选，不新造情节
+5. 段落疏密有致，情绪重的地方段落要短
+6. 章末必须留钩子：一个未落地的念头、一个反常的动静、一句没说完的话，让读者想翻下一章
+7. 总字数保持在原稿的 85%-115%
+直接输出润色后的全文，不要标题，不要解释。
+
+【初稿】
+{draft}"""
+
+STYLE_SAMPLE = """外头北风刮了一夜，窗户纸噗噗地响。老周头摸黑起来，往灶膛里塞了把松明子，火苗子哄地窜上来，把他的脸映得红一阵白一阵。
+"爹，水缸冻了。"大林子揉着眼睛站在门口，鼻尖通红。
+"冻了就砸。"老周头把火钳子往灶边一搁，"人还能让尿憋死。"
+他抄起门后的镐头，三两下凿开缸沿的冰碴子，舀了半瓢水，仰头灌了一口。水凉得扎牙，他咂咂嘴，倒是笑了。"""
+
+BRIEF_SYS = "你是小说编辑，用一句话概括章节内容。"
+BRIEF_TMPL = """用一句话（30-50字）概括这一章讲了什么，突出具体事件，让没读过的人知道这章的看点。直接输出这句话，不要"本章讲述了"。
+
+【章节正文】
+{content}"""
 
 
 def _parse_outline_facts(outline: str) -> List[Dict]:
@@ -81,7 +112,7 @@ class ContentPipeline:
         logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(r.text))
         return book
 
-    def generate_chapter(self, book_id: int, no: int) -> Chapter:
+    def generate_chapter(self, book_id: int, no: int, polish: bool = True) -> Chapter:
         book = self.db.get(Book, book_id)
         if not book:
             raise ValueError(f"书 {book_id} 不存在")
@@ -91,17 +122,49 @@ class ContentPipeline:
         brief = self._chapter_brief(book.outline, no)
         theme_prompt = book.theme.prompt_template if book.theme else ""
         result = gen.generate(no, theme_prompt, brief, preset=None)
+        content = result["content"]
+        # 润色 pass：去 AI 腔、强化文风与章末钩子（失败降级用初稿）
+        if polish:
+            try:
+                content = self.polish_text(book.title, no, content)
+            except Exception as e:  # noqa
+                logger.warning("第%d章润色失败，用初稿: %s", no, e)
 
         ch = self.db.query(Chapter).filter_by(book_id=book_id, no=no).first()
         if not ch:
             ch = Chapter(book_id=book_id, no=no)
             self.db.add(ch)
-        ch.content = result["content"]
-        ch.word_count = result["words"]
+        ch.content = content
+        ch.word_count = len(re.sub(r"\s", "", content))
         ch.consistency_conflicts = result["conflicts"]
         ch.review_status = "pending"
         self.db.commit(); self.db.refresh(ch)
+        # 章节一句话提要
+        try:
+            ch.brief = self.gen_brief(content)
+            self.db.commit()
+        except Exception as e:  # noqa
+            logger.warning("第%d章提要生成失败: %s", no, e)
         return ch
+
+    def polish_text(self, title: str, no: int, draft: str) -> str:
+        """润色一段正文（供生成 pass 和既有章节翻新复用）。"""
+        r = self.adapter.generate(
+            POLISH_TMPL.format(title=title, no=no,
+                               style_sample=STYLE_SAMPLE, draft=draft),
+            model=settings.LLM_MODEL_OUTLINE,  # 润色用 Pro，质感优先
+            system=POLISH_SYS, max_tokens=6000, temperature=0.6)
+        text = r.text.strip()
+        if len(text) < len(draft) * 0.5:
+            raise RuntimeError("润色结果异常短，丢弃")
+        return text
+
+    def gen_brief(self, content: str) -> str:
+        """章节一句话提要（30-50字）。"""
+        r = self.adapter.generate(BRIEF_TMPL.format(content=content[:2500]),
+                                  model=settings.LLM_MODEL_CHAPTER,
+                                  system=BRIEF_SYS, max_tokens=120, temperature=0.5)
+        return r.text.strip().strip('"').strip()[:80]
 
     def generate_book(self, book_id: int, max_chapters: Optional[int] = None) -> Dict:
         """逐章生成全书，返回统计。"""

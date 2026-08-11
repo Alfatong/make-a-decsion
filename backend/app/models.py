@@ -46,6 +46,7 @@ class Chapter(Base):
     book_id = Column(Integer, ForeignKey("books.id"))
     no = Column(Integer, nullable=False)                  # 第几章
     title = Column(String(128), default="")
+    brief = Column(String(200), default="")               # 一句话提要
     content = Column(Text, default="")
     word_count = Column(Integer, default=0)
     # 一致性校验 + 机审结果

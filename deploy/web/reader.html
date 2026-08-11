@@ -157,7 +157,7 @@ async function openBook(id){
     app.innerHTML = `<h1 class="book">${esc(b.title)}<span class="ai-tag">AI 创作</span></h1>
       <div style="color:var(--muted);font-size:16px;margin-bottom:14px">共 ${b.total_chapters} 章</div>
       ${b.intro?`<div style="font-size:19px;background:var(--bg2);border-radius:10px;padding:16px;margin-bottom:14px;line-height:1.9">${esc(b.intro)}</div>`:''}
-      ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
+      ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}${c.brief?`<div style="font-size:15px;color:var(--muted);margin-top:3px">${esc(c.brief)}</div>`:''}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
     window.scrollTo(0,0);
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }

@@ -50,7 +50,8 @@ def book_intro(bid: int, db: Session = Depends(get_db)):
     b = db.get(Book, bid)
     if not b or b.status != "on_shelf":
         raise BizError(ERR_NOT_FOUND, "作品不存在或未上架")
-    toc = [{"no": c.no, "title": c.title or f"第{c.no}章", "word_count": c.word_count}
+    toc = [{"no": c.no, "title": c.title or f"第{c.no}章", "word_count": c.word_count,
+            "brief": c.brief or ""}
            for c in b.chapters if c.review_status == "manual_pass"]
     return ok({**_book_card(b), "outline": b.outline[:500], "toc": toc})
 

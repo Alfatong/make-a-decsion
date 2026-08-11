@@ -2,12 +2,14 @@
 题材 CRUD / 生成任务 / 审核队列 / 上架
 写接口带 idempotency_key / dedup_key 防重。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
-import os
+import os, logging
+
+logger = logging.getLogger(__name__)
 
 from ..db import get_db, Base, engine
 from ..core.response import ok, BizError, ERR_NOT_FOUND, ERR_REVIEW
@@ -65,8 +67,9 @@ class NewBookIn(BaseModel):
 
 
 @router.post("/books")
-def create_book(body: NewBookIn, db: Session = Depends(get_db)):
-    # dedup 防重
+def create_book(body: NewBookIn, background: BackgroundTasks,
+                db: Session = Depends(get_db)):
+    """创建书籍。auto_generate=true 时逐章生成放后台任务（避免 HTTP 超时）。"""
     if db.query(GenTask).filter_by(dedup_key=body.dedup_key).first():
         raise BizError(4301, "重复任务（dedup_key 已存在）")
     task = GenTask(task_type="new_book", dedup_key=body.dedup_key,
@@ -77,22 +80,81 @@ def create_book(body: NewBookIn, db: Session = Depends(get_db)):
         book = pipe.create_book(body.theme_id, body.title, body.chapters)
         result = {"book_id": book.id, "outline_len": len(book.outline)}
         if body.auto_generate:
-            gen = pipe.generate_book(book.id, body.max_chapters)
-            result.update(gen)
-        task.status = "done"; task.result = result; task.finished_at = datetime.utcnow()
+            _bg_generate_book(task.id, book.id, body.max_chapters)
+            task.status = "generating"
+        else:
+            task.status = "done"; task.result = result
+            task.finished_at = datetime.utcnow()
         db.commit()
-        return ok(result)
+        return ok({**result, "generating": bool(body.auto_generate)})
     except Exception as e:  # noqa
         task.status = "failed"; task.error = str(e); task.finished_at = datetime.utcnow()
         db.commit()
         raise BizError(5000, f"生成失败: {e}")
 
 
+def _bg_generate_book(task_id: int, book_id: int, max_chapters):
+    """后台逐章生成（独立线程，状态写 GenTask，B 端轮询）。"""
+    import threading
+    from ..db import SessionLocal
+
+    def work():
+        db2 = SessionLocal()
+        try:
+            pipe = ContentPipeline(db2)
+            gen = pipe.generate_book(book_id, max_chapters)
+            t = db2.get(GenTask, task_id)
+            t.status = "done"; t.result = gen; t.finished_at = datetime.utcnow()
+            db2.commit()
+        except Exception as e:  # noqa
+            t = db2.get(GenTask, task_id)
+            t.status = "failed"; t.error = str(e); t.finished_at = datetime.utcnow()
+            db2.commit()
+        finally:
+            db2.close()
+    threading.Thread(target=work, daemon=True).start()
+
+
+@router.get("/gen-tasks")
+def list_gen_tasks(db: Session = Depends(get_db)):
+    """生成任务列表（B 端轮询进度）。"""
+    rows = db.query(GenTask).order_by(GenTask.id.desc()).limit(20).all()
+    return ok([{"id": t.id, "type": t.task_type, "status": t.status,
+                "dedup_key": t.dedup_key, "result": t.result, "error": t.error,
+                "created_at": t.created_at.isoformat() if t.created_at else ""}
+               for t in rows])
+
+
+@router.post("/books/{bid}/machine-review-all")
+def machine_review_all(bid: int, db: Session = Depends(get_db)):
+    """全书批量机审：pending 章节走一遍 TMS，pass 的进人工复核队列。"""
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    rs = ReviewService()
+    passed, hit = 0, 0
+    for ch in b.chapters:
+        if ch.review_status not in ("pending",):
+            continue
+        try:
+            res = rs.review_text(ch.content[:3000])
+            ch.review_label = res.get("label", "")
+            if res.get("hit"):
+                ch.review_status = "machine_hit"; hit += 1
+            else:
+                ch.review_status = "machine_pass"; passed += 1
+        except Exception as e:  # noqa
+            logger.warning("机审失败 ch%s: %s", ch.id, e)
+    db.commit()
+    return ok({"book_id": bid, "machine_pass": passed, "machine_hit": hit})
+
+
 @router.get("/books")
 def list_books(db: Session = Depends(get_db)):
     rows = db.query(Book).all()
     return ok([{"id": b.id, "title": b.title, "status": b.status,
-                "total_chapters": b.total_chapters,
+                "total_chapters": b.total_chapters, "intro": b.intro or "",
+                "theme": b.theme.name if b.theme else "",
                 "chapters": len(b.chapters)} for b in rows])
 
 
