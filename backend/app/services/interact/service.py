@@ -44,10 +44,12 @@ GEN_NODE_TMPL = """长篇小说《{title}》第{no}章刚读完，读者要做�
 {next_context}
 
 设计一个互动节点，要求：
-1. question：必须紧扣本章结尾的具体事件或悬念，让读者觉得"这问题问到我心坎上了"，禁用"你想怎么发展"这类空泛提问
-2. options[0]：与下一章实际走向呼应的选择（读者选了它，下一章会有"猜中了"的满足感）
-3. options[1]：另一种符合人物性格、但剧情未采用的走向（让读者纠结）
-4. 两个选项都要具体、有画面感，体现不同的处事态度，不能是"继续看/不看了"这种假选择
+1. question：必须紧扣本章结尾的具体事件或悬念，并引用本章结尾的实际场景细节（人物、物件、原话），让读者觉得"这问题问到我心坎上了"
+2. 【铁律】question 和 options 里只能出现本章已经写到的人物、事件、物件。下一章走向只用于暗中校准选项方向，【绝对禁止】把本章没有出现的新人物、新事件、新物件写进问题或选项（读者还没看到，会出戏）
+3. options[0]：与下一章实际走向暗中呼应的选择，但表述必须完全用本章已有的信息（读者选了它，下一章会有"猜中了"的满足感）
+4. options[1]：另一种符合人物性格、但剧情未采用的走向（让读者纠结）
+5. 两个选项都要具体、有画面感，体现不同的处事态度，不能是"继续看/不看了"这种假选择
+6. 【输出前必须自查】把问题、选项A、选项B 里出现的每个人名、物件、事件逐一核对，是否在本章结尾剧情里真实出现过；但凡有一个是本章没写过的（哪怕来自下一章走向），必须改写成本章已有的元素。自查通过后才输出。
 
 严格按以下三行格式输出（不要输出任何其他内容）：
 问题：<互动提问>
@@ -103,19 +105,61 @@ class InteractService:
         ch = self.db.get(Chapter, chapter_id)
         book = self.db.get(Book, ch.book_id)
         next_ch = self._next_chapter(ch)
-        next_ctx = self._chapter_context(next_ch, tail=False, n=800) if next_ch else "（全书最后一章，没有后续）"
+        next_ctx = self._chapter_context(next_ch, tail=False, n=500) if next_ch else "（全书最后一章，没有后续）"
         prompt = GEN_NODE_TMPL.format(
             title=book.title, no=ch.no,
             context=self._chapter_context(ch, tail=True, n=1500),
             next_context=next_ctx)
-        r = self.adapter.generate(prompt, model=settings.LLM_MODEL_CHAPTER,
-                                  system=GEN_NODE_SYS, max_tokens=900, temperature=0.7)
-        question, options = _parse_node(
-            r.text, "接下来会怎样？", ["顺着往下看", "换个想法试试"])
+        question, options = None, None
+        # flash 优先，失败或解析兜底则降级 pro 再试（flash 偶发空响应）
+        for model in (settings.LLM_MODEL_CHAPTER, settings.LLM_MODEL_OUTLINE):
+            try:
+                r = self.adapter.generate(prompt, model=model,
+                                          system=GEN_NODE_SYS, max_tokens=900, temperature=0.7)
+                q, o = _parse_node(r.text, "", [])
+                if q and len(o) >= 2:
+                    question, options = q, o
+                    break
+                logger.warning("互动节点解析失败 model=%s ch=%s，尝试下一档", model, chapter_id)
+            except Exception as e:  # noqa
+                logger.warning("互动节点生成失败 model=%s ch=%s: %s", model, chapter_id, e)
+        if not question:
+            raise RuntimeError(f"互动节点生成失败 ch{chapter_id}（双模型均不可用）")
         node = InteractNode(chapter_id=chapter_id, question=question,
                             options=options, position=0, responses={})
         self.db.add(node); self.db.commit(); self.db.refresh(node)
+        # 预生成两个选项的回响（读者选择时秒出，不现场调 LLM）
+        for idx in range(len(options)):
+            try:
+                self._gen_echo(node, ch, book, next_ctx, options[idx], str(idx))
+            except Exception as e:  # noqa
+                logger.warning("回响预生成失败 ch%s opt%s: %s", chapter_id, idx, e)
+        self.db.refresh(node)
         return node
+
+    def _gen_echo(self, node: InteractNode, ch: Chapter, book: Book,
+                  next_ctx: str, choice: str, key: str) -> str:
+        """生成单个选项的回响并写入缓存（flash 失败降级 pro）。"""
+        prompt = ECHO_TMPL.format(title=book.title, no=ch.no,
+                                  context=self._chapter_context(ch, tail=True, n=1200),
+                                  next_context=next_ctx,
+                                  question=node.question, choice=choice)
+        echo = ""
+        for model in (settings.LLM_MODEL_CHAPTER, settings.LLM_MODEL_OUTLINE):
+            try:
+                r = self.adapter.generate(prompt, model=model,
+                                          system=ECHO_SYS, max_tokens=400, temperature=0.75)
+                if r.text.strip():
+                    echo = r.text.strip()
+                    break
+            except Exception:  # noqa
+                continue
+        if not echo:
+            raise RuntimeError("回响生成失败")
+        resp = dict(node.responses or {}); resp[key] = echo
+        node.responses = resp
+        self.db.commit()
+        return echo
 
     def choose(self, chapter_id: int, option_idx: int) -> Dict:
         """读者选择：返回回响段（优先缓存，否则 LLM 生成并缓存）。"""
@@ -129,15 +173,7 @@ class InteractService:
         next_ch = self._next_chapter(ch)
         next_ctx = self._chapter_context(next_ch, tail=False, n=600) if next_ch else "（全书完）"
         choice = node.options[option_idx] if option_idx < len(node.options) else node.options[0]
-        prompt = ECHO_TMPL.format(title=book.title, no=ch.no,
-                                  context=self._chapter_context(ch, tail=True, n=1200),
-                                  next_context=next_ctx,
-                                  question=node.question, choice=choice)
-        r = self.adapter.generate(prompt, model=settings.LLM_MODEL_CHAPTER,
-                                  system=ECHO_SYS, max_tokens=400, temperature=0.75)
-        echo = r.text.strip()
-        resp = dict(node.responses or {}); resp[key] = echo
-        node.responses = resp
-        self.db.commit()
+        # 兜底：预生成缺失时才现场生成（正常预生成后走不到这里）
+        echo = self._gen_echo(node, ch, book, next_ctx, choice, key)
         return {"echo": echo, "cached": False,
                 "question": node.question, "options": node.options}

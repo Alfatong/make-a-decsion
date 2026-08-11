@@ -272,8 +272,10 @@ async function loadInteract(chapterId){
 }
 // 互动：选择后接 LLM 回响
 async function choose(i){
-  const r=document.getElementById('resp'); r.style.display='block'; r.textContent='想想…';
+  const r=document.getElementById('resp'); r.style.display='block';
+  r.innerHTML='<span style="color:var(--muted)">正在为你接上剧情…</span>';
   document.querySelectorAll('#iopts .opt').forEach(b=>b.disabled=true);
+  const t0=Date.now();
   try{
     const resp = await fetch(API+'/interact/choose',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({chapter_id:state.chapter.chapter_id, option_idx:i, is_rerun:false})});
