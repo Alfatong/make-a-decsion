@@ -341,8 +341,27 @@ def shelf_book(bid: int, db: Session = Depends(get_db)):
     not_passed = [c.no for c in b.chapters if c.review_status != "manual_pass"]
     if not_passed:
         raise BizError(ERR_REVIEW, f"以下章节未通过审核: {not_passed}")
+    # 一致性审计门槛：没有报告先跑一次；FAIL 不允许上架
+    report = b.audit_report
+    if not report:
+        report = ContentPipeline(db).consistency_audit(bid)
+    if not report.get("passed"):
+        raise BizError(ERR_REVIEW,
+                       f"一致性审计未通过：表外人物{len(report.get('violations', []))}处，"
+                       f"低覆盖人物{len(report.get('low_coverage', {}))}个，"
+                       f"过短章节{len(report.get('short_chapters', []))}章。请先修复再上架")
     b.status = "on_shelf"; db.commit()
     return ok({"book_id": bid, "status": "on_shelf"})
+
+
+@router.get("/books/{bid}/audit")
+def get_audit(bid: int, db: Session = Depends(get_db)):
+    """查看/触发全书一致性审计报告。"""
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    report = b.audit_report or ContentPipeline(db).consistency_audit(bid)
+    return ok(report)
 
 
 @router.post("/books/{bid}/off-shelf")

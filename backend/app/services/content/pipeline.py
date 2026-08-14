@@ -31,9 +31,11 @@ OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作�
 {theme_prompt}
 
 要求：
-1. 先给出主要角色表（姓名/年龄/关系/初始住处/关键道具）
-2. 再逐章列出章节标题与一句话情节（格式：第N章 标题 - 情节）
+1. 先给"## 主要角色表"，每个角色严格用此格式一行一个：
+   - **姓名**｜年龄｜关系｜初始住处｜关键道具
+2. 再给"## 章节大纲"，逐章列出章节标题与一句话情节（格式：第N章 标题 - 情节）
 3. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
+4. 主要角色 6-10 个，姓名符合年代感和地域特色，全书不得超表新增有名人物
 直接输出大纲文本。"""
 
 
@@ -74,6 +76,25 @@ def _parse_outline_facts(outline: str) -> List[Dict]:
     facts = []
     # 这里简化为返回空，实际由大纲结构化解析或运营预置
     return facts
+
+
+def _extract_cast(outline: str) -> str:
+    """从大纲提取角色表段落（兼容带编号的标题：一、主要角色表 / 主要角色表 / 角色表）。"""
+    m = re.search(r"#{1,4}\s*(?:[一二三四五六\d]+[、.．]\s*)?(?:主要)?角色表(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
+                  outline, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_cast_names(cast: str) -> List[str]:
+    """从角色表提取人物姓名。兼容两种格式：
+    - markdown 表格：| **赵长山** | 52岁 | ...
+    - 列表全角竖线：- **赵长山**｜55岁｜...
+    """
+    names = []
+    for m in re.finditer(r"\*\*([一-龥]{2,4})\*\*\s*[|｜]", cast):
+        if m.group(1) not in ("姓名", "名称") and m.group(1) not in names:
+            names.append(m.group(1))
+    return names
 
 
 class ContentPipeline:
@@ -121,7 +142,14 @@ class ContentPipeline:
                                model=settings.LLM_MODEL_CHAPTER)
         brief = self._chapter_brief(book.outline, no)
         theme_prompt = book.theme.prompt_template if book.theme else ""
-        result = gen.generate(no, theme_prompt, brief, preset=None)
+        # 一致性硬约束：角色表 + 上一章结尾
+        cast = _extract_cast(book.outline)
+        cast_names = _extract_cast_names(cast)
+        prev = self.db.query(Chapter).filter_by(book_id=book_id, no=no - 1).first()
+        prev_tail = prev.content[-800:] if prev and prev.content else ""
+        result = gen.generate(no, theme_prompt, brief,
+                              cast=cast, cast_names=cast_names,
+                              prev_tail=prev_tail, preset=None)
         content = result["content"]
         # 润色 pass：去 AI 腔、强化文风与章末钩子（失败降级用初稿）
         if polish:
@@ -181,15 +209,81 @@ class ContentPipeline:
             except Exception as e:  # noqa
                 logger.error("第%d章生成失败: %s", no, e)
         book.status = "reviewing"; self.db.commit()
+        # 全书一致性审计（生成后自动检验，报告入库，上架门槛依据）
+        try:
+            report = self.consistency_audit(book_id)
+            logger.info("书%d一致性审计: %s 违规%d 低覆盖%d",
+                        book_id, "PASS" if report["passed"] else "FAIL",
+                        len(report["violations"]), len(report["low_coverage"]))
+        except Exception as e:  # noqa
+            logger.error("一致性审计失败: %s", e)
         return {"book_id": book_id, "chapters_done": done, "conflict_chapters": conflicts}
 
     @staticmethod
     def _chapter_brief(outline: str, no: int) -> str:
+        prefix = f"第{no}章"
         for line in outline.splitlines():
-            s = line.strip()
-            if s.startswith(f"第{no}章") or s.startswith(f"{no}."):
-                return s
+            s = line.strip().lstrip("*- ").strip()
+            if s.startswith(prefix):
+                # 防前缀误匹配：第1章 ≠ 第10章
+                rest = s[len(prefix):]
+                if not rest or not rest[0].isdigit():
+                    return s.rstrip("*").strip()
+            if s.startswith(f"{no}."):
+                return s.rstrip("*").strip()
         return f"第{no}章"
+
+    def consistency_audit(self, book_id: int) -> Dict:
+        """全书一致性审计：人物出场矩阵 + 表外人物 + 主线人物覆盖率 + 门槛判定。
+
+        检验项：
+        1. 表外人物：每章 strict 人名校验（老X头类称呼必须在角色表内）
+        2. 主线人物覆盖率：第1章出现的主角，后续章节出场率必须 >= 50%（防中途换人）
+        3. 章节完整度：每章字数 >= 1500
+        """
+        from ..memory.generator import check_characters
+        book = self.db.get(Book, book_id)
+        cast = _extract_cast(book.outline or "")
+        cast_names = _extract_cast_names(cast)
+        chapters = sorted(book.chapters, key=lambda c: c.no)
+
+        per_chapter, violations = [], []
+        appear_count = {n: 0 for n in cast_names}
+        for ch in chapters:
+            bad = check_characters(ch.content, cast_names, strict=True)
+            # 出场识别：全名或简称（末两字/老+姓）命中
+            appeared = []
+            for n in cast_names:
+                aliases = {n, n[-2:], "老" + n[0]}
+                if any(a and a in ch.content for a in aliases):
+                    appeared.append(n)
+                    appear_count[n] += 1
+            per_chapter.append({"no": ch.no, "words": ch.word_count,
+                                "appeared": appeared, "violations": bad})
+            violations += [{"chapter": ch.no, "v": v} for v in bad]
+
+        n_ch = len(chapters)
+        # 主线人物：第1章出场的人物
+        main_chars = per_chapter[0]["appeared"] if per_chapter else []
+        coverage = {}
+        for n in main_chars:
+            coverage[n] = round(appear_count[n] / n_ch, 2) if n_ch else 0
+        low_coverage = {n: c for n, c in coverage.items() if c < 0.5}
+        short_chapters = [p["no"] for p in per_chapter if p["words"] < 1500]
+
+        passed = (not violations) and (not low_coverage) and (not short_chapters)
+        report = {
+            "book_id": book_id, "passed": passed,
+            "cast": cast_names, "chapters": n_ch,
+            "violations": violations,
+            "main_char_coverage": coverage,
+            "low_coverage": low_coverage,
+            "short_chapters": short_chapters,
+            "per_chapter": per_chapter,
+        }
+        book.audit_report = report
+        self.db.commit()
+        return report
 
     def synthesize_chapter_audio(self, chapter_id: int,
                                  voice: int = 101002,

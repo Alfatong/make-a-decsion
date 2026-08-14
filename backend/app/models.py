@@ -31,6 +31,7 @@ class Book(Base):
     status = Column(String(16), default="draft")          # draft|generating|reviewing|on_shelf|off_shelf
     total_chapters = Column(Integer, default=0)
     ai_label = Column(Boolean, default=True)              # AI 生成标识（合规必须）
+    audit_report = Column(JSON, default=None)             # 全书一致性审计报告
     free_chapters = Column(Integer, default=5)            # 免费章数
     price_cents = Column(Integer, default=199)            # 整书买断价（分）
     chapter_price_cents = Column(Integer, default=10)     # 单章价（分）

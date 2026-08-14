@@ -32,6 +32,7 @@
         <template #default="{ row }">
           <el-button v-if="row.status === 'draft'" type="primary" size="small"
                      @click="openOutline(row)">编辑大纲</el-button>
+          <el-button size="small" @click="showAudit(row)">审计</el-button>
           <el-button size="small" @click="reviewAll(row)">批量机审</el-button>
           <el-button v-if="row.status !== 'on_shelf' && row.status !== 'draft'" type="success" size="small"
                      :loading="acting" @click="shelf(row, true)">上架</el-button>
@@ -68,6 +69,37 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="auditDlg" title="全书一致性审计报告" width="780px" top="4vh">
+      <template v-if="audit">
+        <el-alert :type="audit.passed ? 'success' : 'error'" :closable="false" style="margin-bottom:14px"
+                  :title="audit.passed ? '审计通过：人物一致、主线覆盖达标、章节完整' : '审计未通过，详见下方问题清单'" />
+        <el-descriptions :column="2" border size="small" style="margin-bottom:14px">
+          <el-descriptions-item label="角色表">{{ (audit.cast || []).join('、') }}</el-descriptions-item>
+          <el-descriptions-item label="章节数">{{ audit.chapters }}</el-descriptions-item>
+          <el-descriptions-item label="表外人物违规">{{ (audit.violations || []).length }} 处</el-descriptions-item>
+          <el-descriptions-item label="过短章节">{{ (audit.short_chapters || []).join('、') || '无' }}</el-descriptions-item>
+        </el-descriptions>
+        <h4 style="margin:10px 0 6px">主线人物全书出场率</h4>
+        <el-table :data="coverageRows" size="small" max-height="200">
+          <el-table-column prop="name" label="人物" />
+          <el-table-column label="出场率">
+            <template #default="{ row }">
+              <el-progress :percentage="Math.round(row.rate * 100)"
+                           :status="row.rate < 0.5 ? 'exception' : 'success'" />
+            </template>
+          </el-table-column>
+        </el-table>
+        <template v-if="(audit.violations || []).length">
+          <h4 style="margin:14px 0 6px">表外人物违规明细</h4>
+          <el-table :data="audit.violations" size="small" max-height="240">
+            <el-table-column prop="chapter" label="章节" width="80" />
+            <el-table-column prop="v" label="违规内容" />
+          </el-table>
+        </template>
+      </template>
+      <div v-else style="text-align:center;padding:30px;color:#999">加载中…</div>
+    </el-dialog>
+
     <el-dialog v-model="dlg" title="新建书籍" width="520px">
       <el-alert type="info" :closable="false" style="margin-bottom:14px"
                 title="流程：选题材建书 → 编辑大纲/简介（人工干预）→ 开始后台生成 → 批量机审 → 审核队列复核 → 上架" />
@@ -91,7 +123,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api'
 
@@ -163,6 +195,15 @@ async function saveAndGenerate() {
 async function reviewAll(row) {
   const d = await api.post(`/books/${row.id}/machine-review-all`)
   ElMessage.success(`机审完成：通过 ${d.machine_pass}，命中 ${d.machine_hit}`)
+}
+
+// 一致性审计
+const auditDlg = ref(false), audit = ref(null)
+const coverageRows = computed(() =>
+  Object.entries(audit.value?.main_char_coverage || {}).map(([name, rate]) => ({ name, rate })))
+async function showAudit(row) {
+  auditDlg.value = true; audit.value = null
+  audit.value = await api.get(`/books/${row.id}/audit`)
 }
 async function shelf(row, on) {
   acting.value = true
