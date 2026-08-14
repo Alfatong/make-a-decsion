@@ -3,7 +3,7 @@
 所有生成遵循 S2 结论：大纲预置硬事实 + 双层校验 + 空章重试。
 """
 from __future__ import annotations
-import os, re, json, logging, tempfile
+import os, re, json, logging, tempfile, time, threading
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 
@@ -102,6 +102,8 @@ class ContentPipeline:
         self.db = db
         self.adapter = LLMAdapter.from_env()
         self.checker = ConsistencyChecker(adapter=self.adapter, enable_semantic=True)
+        from ..moderation.review import ReviewService
+        self.review = ReviewService()
 
     def _fact_store(self, book_id: int) -> FactStore:
         # 每本书独立事实库文件（生产可改 PostgreSQL 实现同接口）
@@ -133,7 +135,9 @@ class ContentPipeline:
         logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(r.text))
         return book
 
-    def generate_chapter(self, book_id: int, no: int, polish: bool = True) -> Chapter:
+    def _gen_chapter_core(self, book_id: int, no: int) -> Chapter:
+        """章节核心生成（串行环节）：生成 + 人名/衔接校验 + 入库。
+        不润色、不提要、不机审——这些走 _post_chapter 异步。"""
         book = self.db.get(Book, book_id)
         if not book:
             raise ValueError(f"书 {book_id} 不存在")
@@ -152,13 +156,6 @@ class ContentPipeline:
                               cast=cast, cast_names=cast_names,
                               prev_tail=prev_tail, next_brief=next_brief, preset=None)
         content = result["content"]
-        # 润色 pass：去 AI 腔、强化文风与章末钩子（失败降级用初稿）
-        if polish:
-            try:
-                content = self.polish_text(book.title, no, content)
-            except Exception as e:  # noqa
-                logger.warning("第%d章润色失败，用初稿: %s", no, e)
-
         ch = self.db.query(Chapter).filter_by(book_id=book_id, no=no).first()
         if not ch:
             ch = Chapter(book_id=book_id, no=no)
@@ -168,12 +165,44 @@ class ContentPipeline:
         ch.consistency_conflicts = result["conflicts"]
         ch.review_status = "pending"
         self.db.commit(); self.db.refresh(ch)
+        return ch
+
+    def _post_chapter(self, chapter_id: int, title: str, no: int,
+                      polish: bool = True):
+        """章节后处理（可异步并行）：润色 → 提要 → 机审。失败均降级不阻塞。"""
+        ch = self.db.get(Chapter, chapter_id)
+        if not ch or not ch.content:
+            return
+        # 润色 pass（pro 抖动时登记，等补跑）
+        if polish:
+            try:
+                polished = self.polish_text(title, no, ch.content)
+                ch.content = polished
+                ch.word_count = len(re.sub(r"\s", "", polished))
+                self.db.commit()
+            except Exception as e:  # noqa
+                logger.warning("第%d章润色失败，用初稿: %s", no, e)
         # 章节一句话提要
         try:
-            ch.brief = self.gen_brief(content)
+            ch.brief = self.gen_brief(ch.content)
             self.db.commit()
         except Exception as e:  # noqa
             logger.warning("第%d章提要生成失败: %s", no, e)
+        # 机审
+        try:
+            res = self.review.review_text(ch.content[:3000])
+            ch.review_label = res.get("label", "")
+            ch.review_status = "machine_hit" if res.get("hit") else "machine_pass"
+            self.db.commit()
+        except Exception as e:  # noqa
+            logger.warning("第%d章机审失败: %s", no, e)
+
+    def generate_chapter(self, book_id: int, no: int, polish: bool = True) -> Chapter:
+        """单章完整生成（同步版，人工单章场景用）。"""
+        ch = self._gen_chapter_core(book_id, no)
+        book = self.db.get(Book, book_id)
+        self._post_chapter(ch.id, book.title, no, polish=polish)
+        self.db.refresh(ch)
         return ch
 
     def polish_text(self, title: str, no: int, draft: str) -> str:
@@ -196,19 +225,56 @@ class ContentPipeline:
         return r.text.strip().strip('"').strip()[:80]
 
     def generate_book(self, book_id: int, max_chapters: Optional[int] = None) -> Dict:
-        """逐章生成全书，返回统计。"""
+        """流水线生成全书：
+        - 章节正文串行（前章衔接依赖）
+        - 润色/提要/机审 线程池并行（每章生成完即提交）
+        - 失败章节指数退避自愈重试（30/60/120/300s 四轮）
+        - 收尾：审计（同步）+ TTS/互动（后台守护线程）
+        """
+        from concurrent.futures import ThreadPoolExecutor
         book = self.db.get(Book, book_id)
         book.status = "generating"; self.db.commit()
         n = max_chapters or book.total_chapters
-        done, conflicts = 0, 0
+        title = book.title
+        pool = ThreadPoolExecutor(max_workers=4)
+        done, conflicts, failed = 0, 0, []
+
+        def _gen_one(no: int):
+            ch = self._gen_chapter_core(book_id, no)
+            pool.submit(self._post_safe, ch.id, title, no)
+            return ch
+
         for no in range(1, n + 1):
             try:
-                ch = self.generate_chapter(book_id, no)
+                ch = _gen_one(no)
                 done += 1
                 if ch.consistency_conflicts:
                     conflicts += 1
             except Exception as e:  # noqa
-                logger.error("第%d章生成失败: %s", no, e)
+                logger.error("第%d章生成失败（待自愈重试）: %s", no, e)
+                failed.append(no)
+
+        # 自愈重试：指数退避，扛模型长时抖动
+        for wait in (30, 60, 120, 300):
+            if not failed:
+                break
+            logger.info("自愈重试：%d 秒后重试章节 %s", wait, failed)
+            time.sleep(wait)
+            retry, failed = failed, []
+            for no in retry:
+                try:
+                    ch = _gen_one(no)
+                    done += 1
+                    if ch.consistency_conflicts:
+                        conflicts += 1
+                except Exception as e:  # noqa
+                    logger.error("第%d章自愈重试仍失败: %s", no, e)
+                    failed.append(no)
+        if failed:
+            logger.error("书%d 最终失败章节: %s", book_id, failed)
+
+        pool.shutdown(wait=True)  # 等润色/提要/机审全部落地
+        book = self.db.get(Book, book_id)  # refresh（后处理线程改过章节）
         book.status = "reviewing"; self.db.commit()
         # 全书一致性审计（生成后自动检验，报告入库，上架门槛依据）
         try:
@@ -218,7 +284,52 @@ class ContentPipeline:
                         len(report["violations"]), len(report["low_coverage"]))
         except Exception as e:  # noqa
             logger.error("一致性审计失败: %s", e)
-        return {"book_id": book_id, "chapters_done": done, "conflict_chapters": conflicts}
+        # TTS + 互动：后台守护线程自动补齐（不阻塞任务返回）
+        try:
+            t = threading.Thread(target=self._enrich_book, args=(book_id,), daemon=True)
+            t.start()
+        except Exception as e:  # noqa
+            logger.error("TTS/互动收尾线程启动失败: %s", e)
+        return {"book_id": book_id, "chapters_done": done,
+                "conflict_chapters": conflicts, "failed": failed}
+
+    def _post_safe(self, chapter_id: int, title: str, no: int):
+        """线程池安全的后处理：独立 DB session。"""
+        from ...db import SessionLocal
+        db = SessionLocal()
+        try:
+            ContentPipeline(db)._post_chapter(chapter_id, title, no)
+        except Exception as e:  # noqa
+            logger.error("第%d章后处理异常: %s", no, e)
+        finally:
+            db.close()
+
+    def _enrich_book(self, book_id: int):
+        """全书 TTS + 互动节点后台补齐（独立 session，失败降级）。"""
+        from ...db import SessionLocal
+        db = SessionLocal()
+        try:
+            from ..interact.service import InteractService
+            svc = InteractService(db)
+            pipe = ContentPipeline(db)
+            chapters = db.query(Chapter).filter_by(book_id=book_id).order_by(Chapter.no).all()
+            for ch in chapters:
+                try:
+                    pipe.synthesize_chapter_audio(ch.id)
+                except Exception as e:  # noqa
+                    logger.warning("TTS ch%s 失败: %s", ch.id, e)
+                for attempt in range(3):
+                    try:
+                        svc.get_or_create_node(ch.id)
+                        break
+                    except Exception as e:  # noqa
+                        logger.warning("互动 ch%s 试%d失败: %s", ch.id, attempt+1, e)
+                        time.sleep(10)
+            logger.info("书%d TTS/互动收尾完成", book_id)
+        except Exception as e:  # noqa
+            logger.error("书%d TTS/互动收尾异常: %s", book_id, e)
+        finally:
+            db.close()
 
     @staticmethod
     def _chapter_brief(outline: str, no: int) -> str:

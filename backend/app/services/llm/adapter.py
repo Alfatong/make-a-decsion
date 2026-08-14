@@ -78,7 +78,10 @@ class LLMAdapter:
         return [m for m, (pk, *_ ) in MODEL_INDEX.items() if pk in self._clients]
 
     def generate(self, prompt: str, model: str, system: Optional[str] = None,
-                 max_tokens: int = 4096, temperature: float = 0.7) -> GenResult:
+                 max_tokens: int = 4096, temperature: float = 0.7,
+                 retry_waits: Optional[list] = None) -> GenResult:
+        """retry_waits: 自定义每次重试前等待秒数列表（如 [10,30,60]），
+        用于后台任务扛长时抖动；None 走默认短退避（2^n，上限8s）。"""
         if model not in MODEL_INDEX:
             raise LLMError(f"未知模型 {model}，可用: {list(MODEL_INDEX)}")
         pk, real, pin, pout = MODEL_INDEX[model]
@@ -109,5 +112,8 @@ class LLMAdapter:
                 last_err = e
                 logger.warning("LLM %s 第%d次调用失败: %s", model, attempt+1, e)
                 if attempt < self.max_retries:
-                    time.sleep(min(2 ** attempt, 8))
+                    if retry_waits:
+                        time.sleep(retry_waits[min(attempt, len(retry_waits)-1)])
+                    else:
+                        time.sleep(min(2 ** attempt, 8))
         raise LLMError(f"模型 {model} 调用失败（重试{self.max_retries}次）: {last_err}")

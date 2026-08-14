@@ -112,10 +112,12 @@ class InteractService:
             next_context=next_ctx)
         question, options = None, None
         # flash 优先，失败或解析兜底则降级 pro 再试（flash 偶发空响应）
+        # 长退避扛模型抖动，避免读者看到"互动加载失败"
         for model in (settings.LLM_MODEL_CHAPTER, settings.LLM_MODEL_OUTLINE):
             try:
                 r = self.adapter.generate(prompt, model=model,
-                                          system=GEN_NODE_SYS, max_tokens=900, temperature=0.7)
+                                          system=GEN_NODE_SYS, max_tokens=900,
+                                          temperature=0.7, retry_waits=[10, 30, 60])
                 q, o = _parse_node(r.text, "", [])
                 if q and len(o) >= 2:
                     question, options = q, o
