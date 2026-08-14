@@ -142,14 +142,15 @@ class ContentPipeline:
                                model=settings.LLM_MODEL_CHAPTER)
         brief = self._chapter_brief(book.outline, no)
         theme_prompt = book.theme.prompt_template if book.theme else ""
-        # 一致性硬约束：角色表 + 上一章结尾
+        # 一致性硬约束：角色表 + 上一章结尾 + 下一章前瞻
         cast = _extract_cast(book.outline)
         cast_names = _extract_cast_names(cast)
         prev = self.db.query(Chapter).filter_by(book_id=book_id, no=no - 1).first()
         prev_tail = prev.content[-800:] if prev and prev.content else ""
+        next_brief = self._chapter_brief(book.outline, no + 1) if no < book.total_chapters else ""
         result = gen.generate(no, theme_prompt, brief,
                               cast=cast, cast_names=cast_names,
-                              prev_tail=prev_tail, preset=None)
+                              prev_tail=prev_tail, next_brief=next_brief, preset=None)
         content = result["content"]
         # 润色 pass：去 AI 腔、强化文风与章末钩子（失败降级用初稿）
         if polish:

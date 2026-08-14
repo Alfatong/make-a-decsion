@@ -16,6 +16,43 @@ GEN_SYS = ("你是一位擅长为60岁以上老年读者创作年代家庭题材
 # 可信主体白名单：硬事实只信大纲预置，模型抽取不覆盖
 TRUSTED_KEYS = {("借条", "state"), ("刘婶", "alive"), ("李长顺", "location"), ("李长顺", "alive")}
 
+CONTINUITY_SYS = "你是小说编辑，专查章节间的剧情矛盾。只输出结论，简洁直接。"
+CONTINUITY_TMPL = """检查下面这段小说正文中，人物做出的【具体约定、计划、承诺】是否与后续大纲冲突。
+
+【正文】
+{content}
+
+【下一章大纲】
+{next_brief}
+
+规则：
+1. 只关注正文里明确说出的具体安排（谁和谁、什么时候、去做什么）
+2. 如果这些安排与下一章大纲矛盾（比如正文说甲和乙去巡山，大纲下一章是甲和丙去巡山），就是冲突
+3. 没有具体安排、或安排与大纲兼容，都算无冲突
+
+输出格式（严格遵守）：
+无冲突 → 只输出：OK
+有冲突 → 输出：CONFLICT: 一句话说明冲突点"""
+
+
+def check_continuity(adapter, content: str, next_brief: str,
+                     model: str) -> Optional[str]:
+    """语义级衔接校验：正文中的具体约定是否与下一章大纲冲突。
+    返回 None=无冲突，否则返回冲突描述。失败降级为 None（不阻塞）。"""
+    if not next_brief:
+        return None
+    try:
+        r = adapter.generate(
+            CONTINUITY_TMPL.format(content=content[:3500], next_brief=next_brief),
+            model=model, system=CONTINUITY_SYS, max_tokens=120, temperature=0.1)
+        text = r.text.strip()
+        if text.upper().startswith("CONFLICT"):
+            return text.split(":", 1)[-1].strip()[:100]
+        return None
+    except Exception as e:  # noqa
+        logger.warning("衔接校验失败（降级跳过）: %s", e)
+        return None
+
 
 def check_characters(content: str, cast_names: List[str],
                      strict: bool = False) -> List[str]:
@@ -90,21 +127,25 @@ class ChapterGenerator:
 
     def generate(self, chapter: int, theme: str, brief: str,
                  cast: str = "", cast_names: Optional[List[str]] = None,
-                 prev_tail: str = "",
+                 prev_tail: str = "", next_brief: str = "",
                  preset: Optional[List[Dict]] = None) -> Dict:
         """生成一章并做一致性校验。返回 {content, conflicts, retries, words}
 
         cast: 全书角色表原文（硬约束，只准用这些人）
         cast_names: 角色姓名列表（用于生成后校验）
         prev_tail: 上一章结尾（衔接上下文）
+        next_brief: 下一章大纲（前瞻约束：本章埋的钩子必须与之兼容）
         """
         memory = self.store.snapshot()
         mem_block = (f"\n【已确立的故事事实（必须严格遵守）】\n{memory}\n" if memory else "")
         cast_block = (f"\n【全书角色表（铁律：只准使用表中人物，不得新造有名有姓的人物。"
                       f"人物姓名、关系、住处、道具必须与表内一致）】\n{cast}\n" if cast else "")
         prev_block = (f"\n【上一章结尾（本章须与之衔接）】\n…{prev_tail}\n" if prev_tail else "")
+        next_block = (f"\n【下一章大纲（前瞻约束）】\n{next_brief}\n"
+                      f"本章如需埋钩子或让人物做出具体约定/计划，必须与下一章大纲兼容，"
+                      f"不得自创与之冲突的行程或承诺。\n" if next_brief else "")
         prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{mem_block}"
-                  f"{prev_block}\n【本章大纲】\n{brief}\n\n要求：只写正文，2500-3500字，遵循事实与角色表，"
+                  f"{prev_block}{next_block}\n【本章大纲】\n{brief}\n\n要求：只写正文，2500-3500字，遵循事实与角色表，"
                   f"与上一章结尾自然衔接，直接输出正文。")
 
         # 空章/过短/人物违规自动重试
@@ -122,6 +163,14 @@ class ChapterGenerator:
                     logger.warning("第%d章人物违规 %s，带反馈重试", chapter, bad[:3])
                     prompt += (f"\n\n【上次生成的错误】出现了角色表以外的人物："
                                f"{','.join(bad[:5])}。本次生成只准使用角色表中的人物。")
+                    continue
+            # 语义衔接校验：本章具体约定不得与下一章大纲冲突
+            if next_brief and attempt < self.max_gen_retries:
+                conflict = check_continuity(self.adapter, content, next_brief, self.model)
+                if conflict:
+                    logger.warning("第%d章衔接冲突 %s，带反馈重试", chapter, conflict)
+                    prompt += (f"\n\n【上次生成的错误】正文中的人物约定与下一章大纲冲突：{conflict}。"
+                               f"本次生成时，人物的具体计划必须与下一章大纲兼容。")
                     continue
             break
         if len(content) < 800:
