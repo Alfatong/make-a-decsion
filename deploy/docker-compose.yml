@@ -3,6 +3,7 @@ version: "3.9"
 services:
   api:
     build: ..
+    image: novel-app:latest
     container_name: novel-api
     restart: always
     env_file: ../.env
@@ -10,6 +11,27 @@ services:
       - "127.0.0.1:8081:8000"   # 对外经系统 nginx 反代（80/443 被占用，故仅本机回环）
     volumes:
       - ./web:/opt/novel-app/deploy/web   # 音频/静态写入宿主机 web，供系统 nginx 托管
+    environment:
+      - APP_ENV=prod
+      - DATABASE_URL=postgresql+psycopg2://novel:${POSTGRES_PASSWORD}@postgres:5432/novel
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    networks:
+      - novel-net
+
+  # 生成 Worker：从 Redis 队列 gen:book 消费建书任务，可横向扩副本
+  # 扩容：docker compose up -d --scale worker=3
+  worker:
+    image: novel-app:latest   # 复用 api 镜像，先 build api 再启 worker
+    command: python -m app.worker
+    restart: always
+    env_file: ../.env
+    volumes:
+      - ./web:/opt/novel-app/deploy/web   # TTS 音频写入同一 web 目录
     environment:
       - APP_ENV=prod
       - DATABASE_URL=postgresql+psycopg2://novel:${POSTGRES_PASSWORD}@postgres:5432/novel

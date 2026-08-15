@@ -94,7 +94,21 @@ def create_book(body: NewBookIn, background: BackgroundTasks,
 
 
 def _bg_generate_book(task_id: int, book_id: int, max_chapters):
-    """后台逐章生成（独立线程，状态写 GenTask，B 端轮询）。"""
+    """生成任务派单：优先入 Redis 队列（worker 容器并行消费）；
+    Redis 不可用时降级为 API 进程内线程（单机模式）。"""
+    import json as _json
+    try:
+        import redis as _redis
+        from ..core.config import settings
+        r = _redis.from_url(settings.REDIS_URL, decode_responses=True, socket_timeout=3)
+        r.ping()
+        r.lpush("gen:book", _json.dumps({"book_id": book_id, "task_id": task_id,
+                                         "max_chapters": max_chapters}))
+        logger.info("任务入队 gen:book book=%s task=%s", book_id, task_id)
+        return
+    except Exception as e:  # noqa
+        logger.warning("Redis 队列不可用，降级本地线程: %s", e)
+
     import threading
     from ..db import SessionLocal
 

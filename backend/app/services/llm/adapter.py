@@ -64,10 +64,48 @@ class LLMAdapter:
         self.timeout = timeout
         self.max_retries = max_retries
         self._clients = {}
+        self._redis = None
+        self._redis_failed = False
+        self.pro_rpm = int(os.environ.get("PRO_RPM", "8"))  # pro 全局每分钟上限
         for pk, p in PROVIDERS.items():
             k = keys.get(pk)
             if k:
                 self._clients[pk] = OpenAI(api_key=k, base_url=p["base_url"], timeout=timeout)
+
+    def _throttle_pro(self, model: str):
+        """pro 模型全局限速（Redis 固定窗口，多 worker/进程共享）。
+        Redis 不可用时静默跳过（单机模式）。"""
+        if "pro" not in model:
+            return
+        if self._redis_failed:
+            return
+        if self._redis is None:
+            try:
+                import redis
+                url = os.environ.get("REDIS_URL", "")
+                if not url:
+                    self._redis_failed = True
+                    return
+                self._redis = redis.from_url(url, decode_responses=True,
+                                             socket_timeout=3, socket_connect_timeout=3)
+                self._redis.ping()
+            except Exception:  # noqa
+                self._redis_failed = True
+                return
+        try:
+            for _ in range(30):  # 最长等 30 个窗口
+                now = int(time.time())
+                key = f"ratelimit:pro:{now // 60}"
+                n = self._redis.incr(key)
+                if n == 1:
+                    self._redis.expire(key, 75)
+                if n <= self.pro_rpm:
+                    return
+                wait = 60 - (now % 60) + 1
+                logger.info("pro 限速（%d/%d），等待 %ds", n, self.pro_rpm, wait)
+                time.sleep(wait)
+        except Exception as e:  # noqa
+            logger.warning("pro 限速器异常（跳过限速）: %s", e)
 
     @classmethod
     def from_env(cls, **kw):
@@ -92,6 +130,7 @@ class LLMAdapter:
                    [{"role": "user", "content": prompt}]
         last_err = None
         for attempt in range(self.max_retries + 1):
+            self._throttle_pro(model)  # pro 全局限速（多 worker 共享窗口）
             t0 = time.time()
             try:
                 resp = self._clients[pk].chat.completions.create(

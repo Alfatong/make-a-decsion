@@ -115,10 +115,20 @@ class ContentPipeline:
         if not theme:
             raise ValueError(f"题材 {theme_id} 不存在")
         n = chapters or theme.target_chapters
-        # 生成全书大纲
+        # 生成全书大纲（pro 优先，pro 抖动不可用时降级 flash，保证建书不阻塞）
         prompt = OUTLINE_TMPL.format(title=title, n=n, theme_prompt=theme.prompt_template)
-        r = self.adapter.generate(prompt, model=settings.LLM_MODEL_OUTLINE,
-                                  system=OUTLINE_SYS, max_tokens=6000, temperature=0.7)
+        r = None
+        for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
+            try:
+                r = self.adapter.generate(prompt, model=model,
+                                          system=OUTLINE_SYS, max_tokens=6000, temperature=0.7)
+                if model != settings.LLM_MODEL_OUTLINE:
+                    logger.warning("大纲生成降级到 %s（pro 不可用）", model)
+                break
+            except Exception as e:  # noqa
+                logger.warning("大纲生成 %s 失败: %s", model, e)
+        if r is None:
+            raise RuntimeError("大纲生成失败（双模型均不可用）")
         # 生成作品简介
         intro = ""
         try:
@@ -238,6 +248,14 @@ class ContentPipeline:
         title = book.title
         pool = ThreadPoolExecutor(max_workers=4)
         done, conflicts, failed = 0, 0, []
+        # 断点续跑：已有正文的章节跳过生成，但仍补齐后处理
+        existing = {c.no: c for c in self.db.query(Chapter).filter_by(book_id=book_id).all()
+                    if c.content and len(c.content) >= 800}
+        if existing:
+            logger.info("书%d 断点续跑：跳过已生成章节 %s", book_id, sorted(existing))
+        done = len(existing)
+        for no, c in existing.items():
+            pool.submit(self._post_safe, c.id, title, no)
 
         def _gen_one(no: int):
             ch = self._gen_chapter_core(book_id, no)
@@ -245,6 +263,8 @@ class ContentPipeline:
             return ch
 
         for no in range(1, n + 1):
+            if no in existing:
+                continue  # 断点续跑：跳过
             try:
                 ch = _gen_one(no)
                 done += 1
