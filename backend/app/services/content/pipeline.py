@@ -437,9 +437,22 @@ class ContentPipeline:
         segments = [{"text": s.text, "start_ms": s.start_ms, "end_ms": s.end_ms}
                     for s in result.segments]
         ch.tts_segments = segments
-        audio_url = upload(result.audio_bytes, "mp3") if upload else None
+        if upload:
+            audio_url = upload(result.audio_bytes, "mp3")
+        else:
+            audio_url = self._save_audio_local(chapter_id, result.audio_bytes, "mp3")
         self.db.commit()
         return {"chapter_id": chapter_id, "tts_ok": True,
                 "segments": len(segments), "duration_ms": result.duration_ms,
                 "failed_paragraphs": result.failed_paragraphs,
                 "audio_url": audio_url}
+
+    @staticmethod
+    def _save_audio_local(chapter_id: int, audio_bytes: bytes, ext: str) -> str:
+        """默认落盘：写入 web/audio（nginx 托管），返回 C 端可访问 URL。"""
+        audio_dir = os.environ.get("AUDIO_DIR", "/opt/novel-app/deploy/web/audio")
+        os.makedirs(audio_dir, exist_ok=True)
+        path = os.path.join(audio_dir, f"ch{chapter_id}.{ext}")
+        with open(path, "wb") as f:
+            f.write(audio_bytes)
+        return f"/audio/ch{chapter_id}.{ext}"
