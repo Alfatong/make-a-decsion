@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import os, logging
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,29 @@ def list_gen_tasks(db: Session = Depends(get_db)):
                 "dedup_key": t.dedup_key, "result": t.result, "error": t.error,
                 "created_at": t.created_at.isoformat() if t.created_at else ""}
                for t in rows])
+
+
+@router.get("/events/stats")
+def event_stats(days: int = 7, db: Session = Depends(get_db)):
+    """C 端行为漏斗：锁章曝光 → 各通道点击 → 解锁成功（近 N 天）。"""
+    from ..models import Event
+    from sqlalchemy import func
+    since = datetime.utcnow() - timedelta(days=days)
+    rows = (db.query(Event.event, Event.channel, func.count())
+            .filter(Event.created_at >= since)
+            .group_by(Event.event, Event.channel).all())
+    funnel = {}
+    for event, channel, cnt in rows:
+        key = f"{event}:{channel or '-'}"
+        funnel[key] = cnt
+    # 按天分布
+    daily = (db.query(func.date(Event.created_at), Event.event, func.count())
+             .filter(Event.created_at >= since)
+             .group_by(func.date(Event.created_at), Event.event)
+             .order_by(func.date(Event.created_at)).all())
+    return ok({"since_days": days,
+               "funnel": funnel,
+               "daily": [{"date": str(d), "event": e, "count": c} for d, e, c in daily]})
 
 
 class OutlineEditIn(BaseModel):

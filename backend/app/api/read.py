@@ -3,12 +3,35 @@
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional
 
 from ..db import get_db
 from ..core.response import ok, BizError, ERR_NOT_FOUND
-from ..models import Book, Chapter, Theme, User, ReadProgress
+from ..models import Book, Chapter, Theme, User, ReadProgress, Event
 
 router = APIRouter(prefix="/api/v1", tags=["c-read"])
+
+
+class EventIn(BaseModel):
+    device_id: str
+    event: str                          # lock_view|unlock_click|unlock_success|tts_play
+    book_id: Optional[int] = None
+    chapter_no: Optional[int] = None
+    channel: Optional[str] = None       # ad|share|pay_chapter|pay_full
+
+
+@router.post("/events")
+def track_event(body: EventIn, db: Session = Depends(get_db)):
+    """行为埋点上报（尽力记录，永不阻塞阅读）。"""
+    try:
+        db.add(Event(device_id=body.device_id[:64], event=body.event[:32],
+                     book_id=body.book_id, chapter_no=body.chapter_no,
+                     channel=(body.channel or "")[:16] or None))
+        db.commit()
+    except Exception:  # noqa
+        db.rollback()
+    return ok({"recorded": True})
 
 
 def _book_card(b: Book):

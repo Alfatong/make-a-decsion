@@ -148,3 +148,15 @@ class Entitlement(Base):
     status = Column(String(16), default="active")          # active|frozen|revoked
     order_id = Column(Integer, ForeignKey("orders.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Event(Base):
+    """C 端行为埋点：锁章曝光/解锁点击/解锁成功等，用于模式决策。"""
+    __tablename__ = "events"
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(64), index=True)
+    event = Column(String(32), index=True)      # lock_view|unlock_click|unlock_success|tts_play...
+    book_id = Column(Integer, nullable=True)
+    chapter_no = Column(Integer, nullable=True)
+    channel = Column(String(16), nullable=True)  # ad|share|pay_chapter|pay_full
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)

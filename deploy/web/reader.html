@@ -92,6 +92,13 @@ function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 // 设备标识（内测期即账号）
 function deviceId(){ let id=localStorage.getItem('device_id'); if(!id){ id='dev-'+Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('device_id',id);} return id; }
+// 行为埋点（不阻塞，失败静默）
+function track(event, opts){
+  try{
+    fetch(API+'/events',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign({device_id:deviceId(),event},opts||{}))});
+  }catch(e){}
+}
 // 模式：拉取配置并应用
 async function applyMode(){
   try{
@@ -230,7 +237,7 @@ async function freeUnlock(bid, no, channel){
       body:JSON.stringify({device_id:deviceId(),book_id:bid,chapter_no:no,channel})});
     const j = await r.json();
     hideMask();
-    if(j.code===0){ openChapter(bid, no); }
+    if(j.code===0){ track('unlock_success',{book_id:bid,chapter_no:no,channel}); openChapter(bid, no); }
     else { alert(j.msg||'解锁失败，稍后再试'); }
   }catch(e){ hideMask(); alert('网络异常，稍后再试'); }
 }
@@ -285,16 +292,17 @@ async function openChapter(bid,no){
     // 锁章：展示解锁页（广告/分享免费 + 付费备选）
     if(c.locked){
       hideMask();
+      track('lock_view', {book_id:bid, chapter_no:no});
       app.innerHTML = `
         <div class="chapter-title">${esc(c.title)}</div>
         <div class="lock-box">
           <div class="icon">🔒</div>
           <div class="tip">前 ${c.free_chapters} 章已免费读完<br>看个广告或分享给朋友，就能免费接着读</div>
-          <button class="pay-btn buy" onclick="adUnlock(${bid},${no})">📺 看广告免费读本章</button>
-          <button class="pay-btn share" onclick="shareUnlock(${bid},${no})">↗ 分享给朋友免费读</button>
+          <button class="pay-btn buy" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'ad'});adUnlock(${bid},${no})">📺 看广告免费读本章</button>
+          <button class="pay-btn share" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'share'});shareUnlock(${bid},${no})">↗ 分享给朋友免费读</button>
           <div style="margin-top:22px;font-size:15px;color:var(--muted)">不想看广告？</div>
-          <button class="pay-btn ch" onclick="startPay(${bid},${no},'chapter',${c.chapter_price_cents})">解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
-          <button class="pay-btn ch" onclick="startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
+          <button class="pay-btn ch" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'pay_chapter'});startPay(${bid},${no},'chapter',${c.chapter_price_cents})">解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
+          <button class="pay-btn ch" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'pay_full'});startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
         </div>
         <div class="bar">
           <button onclick="nav(-1)" ${c.has_prev?'':'disabled'}>‹ 上一章</button>
@@ -363,6 +371,7 @@ async function choose(i){
 }
 
 function setupAudio(c){
+  track('tts_play', {book_id:c.book_id, chapter_no:c.no});
   state.audio = new Audio(c.audio_url);
   state.audio.playbackRate = state.speed;
   state.audio.ontimeupdate = ()=>highlight(state.audio.currentTime*1000);
