@@ -35,6 +35,49 @@ CONTINUITY_TMPL = """检查下面这段小说正文中，人物做出的【具�
 无冲突 → 只输出：OK
 有冲突 → 输出：CONFLICT: 一句话说明冲突点"""
 
+DETAIL_CHECK_SYS = "你是小说校对编辑，专查细节一致性错误，眼里揉不得沙子，但只报确凿的错。"
+DETAIL_CHECK_TMPL = """校对下面这一章正文，只查三类细节错误：
+
+【全书角色表】
+{cast}
+
+【称谓约定（全书对话必须遵守）】
+{appellations}
+
+【本章正文】
+{content}
+
+要查的三类错误：
+1. 称谓违规：人物对话/叙述中的互相称呼与"称谓约定"不一致（如约定兄弟间谈论母亲说"咱妈"，正文却写成"我妈"）
+2. 状态违规：人物行为与其身份/学历/年龄/身体状况矛盾（如已毕业工作的人还在写作业、目盲的老人在看书报、卧病的人挑水）
+3. 道具违规：同一物件在本章内位置或状态前后矛盾（如前文说两本书都揣在怀里，后文却从包里取出书；前文说灯已吹灭，后文借灯光缝衣）
+
+规则：
+1. 只报确凿的违规，拿不准、可解释的一律不报
+2. 每类最多报 2 条
+3. 输出格式：每条一行，"类型: 具体描述"（不超过40字）
+4. 没有违规就只输出一个字：无
+"""
+
+
+def check_details(adapter, content: str, cast: str, appellations: str,
+                  model: str) -> List[str]:
+    """细节一致性校验：称谓/人物状态/道具连续性。返回违规列表（空=通过）。"""
+    if not content:
+        return []
+    try:
+        r = adapter.generate(
+            DETAIL_CHECK_TMPL.format(cast=cast[:1500], appellations=appellations or "（无）",
+                                     content=content[:6000]),
+            model=model, system=DETAIL_CHECK_SYS, max_tokens=300, temperature=0.1)
+        text = r.text.strip()
+        if text in ("无", "无。", ""):
+            return []
+        return [ln.strip() for ln in text.splitlines() if ln.strip() and "无" != ln.strip()][:6]
+    except Exception as e:  # noqa
+        logger.warning("细节校验失败（跳过）: %s", e)
+        return []
+
 
 def check_continuity(adapter, content: str, next_brief: str,
                      model: str) -> Optional[str]:
@@ -129,6 +172,7 @@ class ChapterGenerator:
     def generate(self, chapter: int, theme: str, brief: str,
                  cast: str = "", cast_names: Optional[List[str]] = None,
                  prev_tail: str = "", next_brief: str = "",
+                 appellations: str = "",
                  preset: Optional[List[Dict]] = None) -> Dict:
         """生成一章并做一致性校验。返回 {content, conflicts, retries, words}
 
@@ -136,21 +180,25 @@ class ChapterGenerator:
         cast_names: 角色姓名列表（用于生成后校验）
         prev_tail: 上一章结尾（衔接上下文）
         next_brief: 下一章大纲（前瞻约束：本章埋的钩子必须与之兼容）
+        appellations: 称谓约定（对话称呼必须遵守）
         """
         memory = self.store.snapshot()
         mem_block = (f"\n【已确立的故事事实（必须严格遵守）】\n{memory}\n" if memory else "")
         cast_block = (f"\n【全书角色表（铁律：只准使用表中人物，不得新造有名有姓的人物。"
                       f"人物姓名、关系、住处、道具必须与表内一致）】\n{cast}\n" if cast else "")
+        app_block = (f"\n【称谓约定（人物对话中的互相称呼必须严格遵守，不得混用）】\n{appellations}\n"
+                     if appellations else "")
         prev_block = (f"\n【上一章结尾（本章须与之衔接）】\n…{prev_tail}\n" if prev_tail else "")
         next_block = (f"\n【下一章大纲（前瞻约束）】\n{next_brief}\n"
                       f"本章如需埋钩子或让人物做出具体约定/计划，必须与下一章大纲兼容，"
                       f"不得自创与之冲突的行程或承诺。\n" if next_brief else "")
-        prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{mem_block}"
+        prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{app_block}{mem_block}"
                   f"{prev_block}{next_block}\n【本章大纲】\n{brief}\n\n要求：只写正文，2500-3500字，遵循事实与角色表，"
                   f"与上一章结尾自然衔接，直接输出正文。")
 
         # 空章/过短/人物违规自动重试
         content, retries = "", 0
+        detail_issues: List[str] = []
         for attempt in range(self.max_gen_retries + 1):
             retries = attempt
             content = self._gen_once(prompt)
@@ -173,6 +221,16 @@ class ChapterGenerator:
                     prompt += (f"\n\n【上次生成的错误】正文中的人物约定与下一章大纲冲突：{conflict}。"
                                f"本次生成时，人物的具体计划必须与下一章大纲兼容。")
                     continue
+            # 细节一致性校验：称谓/人物状态/道具连续性（第七道防线）
+            if attempt < self.max_gen_retries:
+                bad_details = check_details(self.adapter, content, cast, appellations, self.model)
+                if bad_details:
+                    detail_issues = bad_details
+                    logger.warning("第%d章细节违规 %s，带反馈重试", chapter, bad_details[:3])
+                    prompt += (f"\n\n【上次生成的细节错误】{'; '.join(bad_details[:4])}。"
+                               f"本次生成必须修正这些细节错误。")
+                    continue
+                detail_issues = []
             break
         if len(content) < 800:
             raise RuntimeError(f"第{chapter}章多次生成仍过短（{len(content)}字）")
@@ -181,6 +239,7 @@ class ChapterGenerator:
         conflicts = self.checker.check(content, self.store)
         if cast_names:
             conflicts += check_characters(content, cast_names, strict=True)
+        conflicts += detail_issues  # 细节违规（重试后仍存在的）计入终检
 
         # 预置硬事实入库（无论是否冲突，事实以大纲为准）
         if preset:

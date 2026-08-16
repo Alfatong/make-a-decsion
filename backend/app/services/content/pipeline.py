@@ -17,7 +17,7 @@ from ..tts.synthesizer import ChapterTTS, TTSError
 
 logger = logging.getLogger(__name__)
 
-OUTLINE_SYS = "你是长篇小说策划编辑，擅长老年年代题材，输出结构化大纲。"
+OUTLINE_SYS = "你是长篇小说策划编辑，擅长老年年代题材，懂节拍设计，输出结构化大纲。"
 INTRO_SYS = "你是小说编辑，擅长写给老年读者看的作品简介，朴实有吸引力。"
 INTRO_TMPL = """为长篇小说《{title}》写一段 120-180 字的作品简介。
 
@@ -32,10 +32,17 @@ OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作�
 
 要求：
 1. 先给"## 主要角色表"，每个角色严格用此格式一行一个：
-   - **姓名**｜年龄｜关系｜初始住处｜关键道具
-2. 再给"## 章节大纲"，逐章列出章节标题与一句话情节（格式：第N章 标题 - 情节）
-3. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
-4. 主要角色 6-10 个，姓名符合年代感和地域特色，全书不得超表新增有名人物
+   - **姓名**｜年龄｜身份/学历｜关系｜初始住处｜关键道具
+2. 再给"## 称谓约定"：写明主要人物之间如何互相称呼（尤其同辈亲属对长辈的统一叫法，如兄弟间谈论母亲一律用"咱妈"；谁叫谁的小名/外号），全书所有对话必须遵守
+3. 再给"## 章节大纲"，逐章列出（格式：第N章 标题 - 情节 - 本章冲突点 - 章末钩子）
+4. 节拍要求（这是重点）：
+   - 每章必须有明确的冲突点或情感张力（误会、分歧、难处、反常迹象），不允许"纯过日子"的平章
+   - 每章结尾必须有钩子：悬念（发现秘密的一半）、情感爆发前夜、两难抉择留白，三选一
+   - 每3-5章安排一次小高潮（矛盾激化/真相揭露一角/关系破裂或和解）
+   - 全书安排2-3次大高潮，高潮前3-5章埋伏笔线索
+   - 情绪节奏遵循"压抑-释放"循环：憋屈的戏不能连压超过3章，之后必须给读者一口气顺出来的释放（和解、澄清、撑腰、团聚）
+5. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
+6. 主要角色 6-10 个，姓名符合年代感和地域特色，全书不得超表新增有名人物
 直接输出大纲文本。"""
 
 
@@ -81,6 +88,13 @@ def _parse_outline_facts(outline: str) -> List[Dict]:
 def _extract_cast(outline: str) -> str:
     """从大纲提取角色表段落（兼容带编号的标题：一、主要角色表 / 主要角色表 / 角色表）。"""
     m = re.search(r"#{1,4}\s*(?:[一二三四五六\d]+[、.．]\s*)?(?:主要)?角色表(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
+                  outline, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_appellations(outline: str) -> str:
+    """从大纲提取称谓约定段落。"""
+    m = re.search(r"#{1,4}\s*(?:[一二三四五六\d]+[、.．]\s*)?称谓约定(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
                   outline, re.S)
     return m.group(1).strip() if m else ""
 
@@ -159,12 +173,14 @@ class ContentPipeline:
         # 一致性硬约束：角色表 + 上一章结尾 + 下一章前瞻
         cast = _extract_cast(book.outline)
         cast_names = _extract_cast_names(cast)
+        appellations = _extract_appellations(book.outline)
         prev = self.db.query(Chapter).filter_by(book_id=book_id, no=no - 1).first()
         prev_tail = prev.content[-800:] if prev and prev.content else ""
         next_brief = self._chapter_brief(book.outline, no + 1) if no < book.total_chapters else ""
         result = gen.generate(no, theme_prompt, brief,
                               cast=cast, cast_names=cast_names,
-                              prev_tail=prev_tail, next_brief=next_brief, preset=None)
+                              prev_tail=prev_tail, next_brief=next_brief,
+                              appellations=appellations, preset=None)
         content = result["content"]
         ch = self.db.query(Chapter).filter_by(book_id=book_id, no=no).first()
         if not ch:
@@ -296,9 +312,24 @@ class ContentPipeline:
         pool.shutdown(wait=True)  # 等润色/提要/机审全部落地
         book = self.db.get(Book, book_id)  # refresh（后处理线程改过章节）
         book.status = "reviewing"; self.db.commit()
+        # 编辑通读 pass：抓跨章细节问题并自动修复，节奏问题记入审计报告
+        try:
+            from .editor import EditorPass
+            editor_report = EditorPass(self.db, self.adapter).run(book_id)
+            logger.info("书%d编辑通读: 细节问题%d处 修复%d章 节奏问题%d处",
+                        book_id, editor_report["detail_issues_found"],
+                        editor_report["detail_fixed"], len(editor_report["pace_issues"]))
+        except Exception as e:  # noqa
+            logger.error("编辑通读失败: %s", e)
+            editor_report = None
         # 全书一致性审计（生成后自动检验，报告入库，上架门槛依据）
         try:
             report = self.consistency_audit(book_id)
+            if editor_report:
+                report["editor"] = editor_report
+                book = self.db.get(Book, book_id)
+                book.audit_report = report
+                self.db.commit()
             logger.info("书%d一致性审计: %s 违规%d 低覆盖%d",
                         book_id, "PASS" if report["passed"] else "FAIL",
                         len(report["violations"]), len(report["low_coverage"]))
