@@ -57,6 +57,7 @@
   .lock-box .tip { font-size:20px; color:var(--muted); margin:16px 0 24px; }
   .pay-btn { display:block; width:100%; font-size:21px; padding:16px; margin:12px 0; border-radius:12px; border:none; cursor:pointer; }
   .pay-btn.buy { background:var(--accent); color:#fff; }
+  .pay-btn.share { background:var(--accent2); color:#fff; }
   .pay-btn.ch { background:var(--bg2); color:var(--ink); border:2px solid var(--rule); }
   .cashier { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:60; display:flex; align-items:flex-end; }
   .cashier .panel { background:#fff; width:100%; border-radius:16px 16px 0 0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); }
@@ -177,6 +178,63 @@ async function openBook(id){
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }
 
+// 免费解锁：看广告
+function adUnlock(bid, no){
+  const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
+  el.innerHTML = `<div class="panel">
+    <div style="font-size:21px;font-weight:700;text-align:center;margin-bottom:10px">广告</div>
+    <div id="adBody" style="background:var(--bg2);border-radius:10px;padding:36px 16px;text-align:center;color:var(--muted);font-size:16px;line-height:1.8">
+      广告位即将接入<br><span style="font-size:14px">（内测期间看完倒计时即可免费阅读）</span>
+    </div>
+    <div id="adTimer" style="text-align:center;font-size:26px;font-weight:700;color:var(--accent);margin:16px 0">15</div>
+    <button class="pay-btn ch" id="adDone" disabled style="opacity:.5">请稍候…</button>
+  </div>`;
+  document.body.appendChild(el);
+  let t = 15;
+  const iv = setInterval(()=>{
+    t--;
+    const timer = document.getElementById('adTimer');
+    if(!timer){ clearInterval(iv); return; }
+    if(t<=0){
+      clearInterval(iv);
+      timer.textContent = '感谢支持';
+      const btn = document.getElementById('adDone');
+      btn.disabled = false; btn.style.opacity = 1;
+      btn.textContent = '✓ 免费阅读本章';
+      btn.className = 'pay-btn buy';
+      btn.onclick = ()=>freeUnlock(bid, no, 'ad');
+    } else { timer.textContent = t; }
+  }, 1000);
+}
+
+// 免费解锁：分享引导（合规：不强制，分享后即可读）
+function shareUnlock(bid, no){
+  const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
+  el.innerHTML = `<div class="panel">
+    <div style="font-size:21px;font-weight:700;text-align:center;margin-bottom:12px">分享给朋友</div>
+    <div style="font-size:18px;line-height:2;color:var(--ink)">
+      1️⃣ 点屏幕右上角的 <b>「···」</b><br>
+      2️⃣ 选「发送给朋友」或「分享到群」<br>
+      3️⃣ 分享完回到这里，点下方按钮
+    </div>
+    <button class="pay-btn buy" onclick="freeUnlock(${bid},${no},'share')">✓ 我已分享，免费阅读</button>
+    <button class="pay-btn ch" onclick="closeCashier()">取消</button>
+  </div>`;
+  document.body.appendChild(el);
+}
+
+async function freeUnlock(bid, no, channel){
+  closeCashier(); showMask('正在解锁…');
+  try{
+    const r = await fetch(API+'/unlock/free',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({device_id:deviceId(),book_id:bid,chapter_no:no,channel})});
+    const j = await r.json();
+    hideMask();
+    if(j.code===0){ openChapter(bid, no); }
+    else { alert(j.msg||'解锁失败，稍后再试'); }
+  }catch(e){ hideMask(); alert('网络异常，稍后再试'); }
+}
+
 // 模拟收银台
 function startPay(bid, no, type, cents){
   const label = type==='buyout' ? '买断全本' : '解锁第 '+no+' 章';
@@ -224,16 +282,19 @@ async function openChapter(bid,no){
     const c = await api(`/books/${bid}/chapters/${no}?device_id=`+deviceId());
     state.chapter=c;
     document.getElementById('topTitle').textContent=state.book?state.book.title:'阅读';
-    // 锁章：展示解锁页
+    // 锁章：展示解锁页（广告/分享免费 + 付费备选）
     if(c.locked){
       hideMask();
       app.innerHTML = `
         <div class="chapter-title">${esc(c.title)}</div>
         <div class="lock-box">
           <div class="icon">🔒</div>
-          <div class="tip">本章起为付费内容<br>前 ${c.free_chapters} 章已免费读完</div>
-          <button class="pay-btn buy" onclick="startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
-          <button class="pay-btn ch" onclick="startPay(${bid},${no},'chapter',${c.chapter_price_cents})">仅解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
+          <div class="tip">前 ${c.free_chapters} 章已免费读完<br>看个广告或分享给朋友，就能免费接着读</div>
+          <button class="pay-btn buy" onclick="adUnlock(${bid},${no})">📺 看广告免费读本章</button>
+          <button class="pay-btn share" onclick="shareUnlock(${bid},${no})">↗ 分享给朋友免费读</button>
+          <div style="margin-top:22px;font-size:15px;color:var(--muted)">不想看广告？</div>
+          <button class="pay-btn ch" onclick="startPay(${bid},${no},'chapter',${c.chapter_price_cents})">解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
+          <button class="pay-btn ch" onclick="startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
         </div>
         <div class="bar">
           <button onclick="nav(-1)" ${c.has_prev?'':'disabled'}>‹ 上一章</button>

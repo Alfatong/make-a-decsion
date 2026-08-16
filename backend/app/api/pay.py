@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 from ..db import get_db
 from ..core.response import ok, BizError
@@ -84,3 +85,42 @@ def pricing(book_id: int, db: Session = Depends(get_db)):
     return ok({"free_chapters": b.free_chapters,
                "price_cents": b.price_cents,
                "chapter_price_cents": b.chapter_price_cents})
+
+
+class FreeUnlockIn(BaseModel):
+    device_id: str
+    book_id: int
+    chapter_no: int
+    channel: str            # share|ad
+
+
+@router.post("/unlock/free")
+def free_unlock(body: FreeUnlockIn, db: Session = Depends(get_db)):
+    """免费解锁单章：看广告 / 分享裂变（order_id 为空的权益即免费权益）。
+    幂等：已解锁直接放行。防薅：每设备每书每日限 8 次免费解锁。
+    注：ad 通道当前为 H5 广告位协议（前端倒计时），小程序化后改服务端校验广告凭证。"""
+    if body.channel not in ("share", "ad"):
+        raise BizError(4001, "非法解锁通道")
+    b = db.get(Book, body.book_id)
+    if not b or b.status != "on_shelf":
+        raise BizError(4201, "作品不存在或未上架")
+    if body.chapter_no <= b.free_chapters:
+        return ok({"unlocked": True, "msg": "本章免费"})
+    u = _user(db, body.device_id)
+    from ..models import Entitlement
+    exist = db.query(Entitlement).filter_by(
+        user_id=u.id, book_id=body.book_id, status="active").all()
+    if any(e.scope == "full" or (e.scope == "chapter" and e.chapter_no == body.chapter_no)
+           for e in exist):
+        return ok({"unlocked": True, "msg": "已解锁"})
+    today = datetime.utcnow().date()
+    today_free = [e for e in db.query(Entitlement).filter_by(
+        user_id=u.id, book_id=body.book_id).all()
+        if e.order_id is None and e.created_at and e.created_at.date() == today]
+    if len(today_free) >= 8:
+        raise BizError(4202, "今日免费次数已用完，明天再来吧")
+    ent = Entitlement(user_id=u.id, book_id=body.book_id, scope="chapter",
+                      chapter_no=body.chapter_no, status="active", order_id=None)
+    db.add(ent); db.commit()
+    return ok({"unlocked": True, "channel": body.channel,
+               "remaining_today": 8 - len(today_free) - 1})
