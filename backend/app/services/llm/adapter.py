@@ -125,6 +125,10 @@ class LLMAdapter:
         pk, real, pin, pout = MODEL_INDEX[model]
         if pk not in self._clients:
             raise LLMError(f"缺少 {pk} API key（env {PROVIDERS[pk]['api_key_env']}）")
+        # 推理模型（pro）：reasoning tokens 计入 completion 额度，
+        # max_tokens 不足时正文一个 token 都出不来（表现为"空响应"）→ 自动放大
+        if "pro" in model:
+            max_tokens = max(max_tokens * 2, max_tokens + 4000)
 
         messages = ([{"role": "system", "content": system}] if system else []) + \
                    [{"role": "user", "content": prompt}]
