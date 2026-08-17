@@ -434,7 +434,9 @@ class ContentPipeline:
         low_coverage = {n: c for n, c in coverage.items() if c < 0.5}
         short_chapters = [p["no"] for p in per_chapter if p["words"] < 1500]
 
-        passed = (not violations) and (not low_coverage) and (not short_chapters)
+        # 低覆盖只报告不拦截（配角戏份少属正常创作选择，编辑知情即可）；
+        # 硬性拦截：违规（表外人物/称谓矛盾）+ 过短章
+        passed = (not violations) and (not short_chapters)
         report = {
             "book_id": book_id, "passed": passed,
             "cast": cast_names, "chapters": n_ch,
