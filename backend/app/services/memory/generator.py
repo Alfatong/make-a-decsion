@@ -194,7 +194,10 @@ class ChapterGenerator:
                       f"不得自创与之冲突的行程或承诺。\n" if next_brief else "")
         prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{app_block}{mem_block}"
                   f"{prev_block}{next_block}\n【本章大纲】\n{brief}\n\n要求：只写正文，2500-3500字，遵循事实与角色表，"
-                  f"与上一章结尾自然衔接，直接输出正文。")
+                  f"与上一章结尾自然衔接。"
+                  f"呼应要求：本章如揭示真相、推进矛盾或处理与前文同类的事件，必须明确呼应【已确立的故事事实】中的相关事件"
+                  f"（提及、对比或串联幕后原因），不得让前文已抛出的悬念在本章凭空消失、各说各话。"
+                  f"直接输出正文。")
 
         # 空章/过短/人物违规自动重试
         content, retries = "", 0
