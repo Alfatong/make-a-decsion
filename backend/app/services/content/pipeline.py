@@ -46,6 +46,45 @@ OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作�
 直接输出大纲文本。"""
 
 
+OUTLINE_CHECK_SYS = "你是大纲校对编辑，专抓章间事实漂移，只报确凿的矛盾。"
+OUTLINE_CHECK_TMPL = """校对这份长篇小说大纲的章间一致性。
+
+【大纲全文】
+{outline}
+
+专查以下问题：
+1. 事实漂移：同一事件/悬念/物件在不同章节的指称或结果不一致。例如：
+   - 第4章说"分房名额被压下"，第5章却写成"夜大名额被挡"（同一悬念的对象漂移）
+   - 第3章说把怀表给了大儿子，第8章又说怀表在二儿子手里（归属漂移）
+   - 前面说某人不知情，后面却在描写他早就知道（信息状态漂移）
+2. 重复混淆桥段：相邻或相近章节里，同一人物遭遇多个说法不同但性质雷同的挫折（如第4章分房名额被夺、第5章夜大名额被夺）——即使逻辑上是两件事，读者也会混淆，应报告建议合并为同一件事或明确错开
+规则：
+1. 只报确凿的矛盾或明显易混淆的桥段；题材、场景、对手完全不同的独立事件不报
+2. 拿不准的不报
+3. 输出 JSON（不要输出其他文字）：{{"issues":[{{"chapters":"涉及的章号","desc":"矛盾描述(40字内)","fix":"统一为哪种说法(30字内)"}}]}}
+4. 没有矛盾输出空数组"""
+
+OUTLINE_FIX_TMPL = """修订这份长篇小说大纲。校对发现以下章间事实漂移，逐条修正（统一各章指称，保持情节走向不变）：
+
+【问题清单】
+{issues}
+
+【大纲全文（待修订）】
+{outline}
+
+要求：只改问题涉及的章节的表述，其余章节原样保留；保持大纲原有结构（角色表/称谓约定/章节大纲格式不变）。直接输出修订后的完整大纲。"""
+
+EVENT_SYS = "你是剧情记录员，用一句话准确概括剧情事件，不含评论。"
+EVENT_TMPL = """从下面这章正文中提取 3-5 条关键剧情事件，每条一句话（包含谁、做了什么、结果如何）。
+
+要求：
+1. 只记对后续剧情有影响的事件（名额/物品归属变动、秘密揭露、约定、关系变化、重要决定）
+2. 事件中的物件、名额、结果要用正文里的原词，不得换说法（如正文是"分房名额"就写"分房名额"）
+3. 每行一条，不加序号不评论
+
+【第{no}章正文】
+{content}"""
+
 POLISH_SYS = "你是资深年代小说编辑，专治 AI 腔，改稿不动剧情。"
 POLISH_TMPL = """下面是长篇小说《{title}》第{no}章的初稿。请润色改写。
 
@@ -143,21 +182,65 @@ class ContentPipeline:
                 logger.warning("大纲生成 %s 失败: %s", model, e)
         if r is None:
             raise RuntimeError("大纲生成失败（双模型均不可用）")
+        outline_text = r.text
+        # 大纲自检：章间事实漂移（同一事件/悬念/物件指称不一）→ 自动修订
+        try:
+            outline_text = self._outline_self_check(outline_text)
+        except Exception as e:  # noqa
+            logger.warning("大纲自检跳过: %s", e)
         # 生成作品简介
         intro = ""
         try:
             ri = self.adapter.generate(
-                INTRO_TMPL.format(title=title, outline=r.text[:2000]),
+                INTRO_TMPL.format(title=title, outline=outline_text[:2000]),
                 model=settings.LLM_MODEL_CHAPTER, system=INTRO_SYS,
                 max_tokens=300, temperature=0.7)
             intro = ri.text.strip()
         except Exception as e:  # noqa
             logger.warning("简介生成失败: %s", e)
-        book = Book(theme_id=theme_id, title=title, intro=intro, outline=r.text,
+        book = Book(theme_id=theme_id, title=title, intro=intro, outline=outline_text,
                     status="draft", total_chapters=n, ai_label=True)
         self.db.add(book); self.db.commit(); self.db.refresh(book)
-        logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(r.text))
+        logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(outline_text))
         return book
+
+    def _outline_self_check(self, outline: str) -> str:
+        """大纲章间一致性自检 + 自动修订（pro 优先，失败降级 flash，再失败用原稿）。"""
+        check_prompt = OUTLINE_CHECK_TMPL.format(outline=outline[:14000])
+        issues = []
+        for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
+            try:
+                rc = self.adapter.generate(check_prompt, model=model,
+                                           system=OUTLINE_CHECK_SYS,
+                                           max_tokens=1500, temperature=0.1,
+                                           retry_waits=[10, 40])
+                m = re.search(r"\{.*\}", rc.text, re.S)
+                if m:
+                    issues = json.loads(m.group(0)).get("issues", [])
+                break
+            except Exception as e:  # noqa
+                logger.warning("大纲自检 %s 失败: %s", model, e)
+        if not issues:
+            logger.info("大纲自检通过，无事实漂移")
+            return outline
+        logger.warning("大纲自检发现 %d 处漂移: %s", len(issues),
+                       [i.get("desc", "")[:30] for i in issues[:3]])
+        issue_text = "\n".join(f"- 章节{i.get('chapters','')}: {i.get('desc','')}（统一为：{i.get('fix','')}）"
+                               for i in issues)
+        fix_prompt = OUTLINE_FIX_TMPL.format(issues=issue_text, outline=outline)
+        for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
+            try:
+                rf = self.adapter.generate(fix_prompt, model=model,
+                                           system=OUTLINE_SYS,
+                                           max_tokens=8000, temperature=0.3,
+                                           retry_waits=[10, 40])
+                if len(rf.text) > len(outline) * 0.5:
+                    logger.info("大纲已自动修订 %d 处漂移", len(issues))
+                    return rf.text.strip()
+            except Exception as e:  # noqa
+                logger.warning("大纲修订 %s 失败: %s", model, e)
+        logger.error("大纲修订失败，使用原稿（漂移未修）")
+        return outline
 
     def _gen_chapter_core(self, book_id: int, no: int) -> Chapter:
         """章节核心生成（串行环节）：生成 + 人名/衔接校验 + 入库。
@@ -191,7 +274,22 @@ class ContentPipeline:
         ch.consistency_conflicts = result["conflicts"]
         ch.review_status = "pending"
         self.db.commit(); self.db.refresh(ch)
+        # 章节事件入库：后续章节生成时能看到"已发生的剧情"（防跨章事件漂移）
+        try:
+            for ev in self._extract_events(no, content):
+                gen.store.add("event", "剧情", f"第{no}章事件", ev,
+                              chapter=no, source="outline")
+        except Exception as e:  # noqa
+            logger.warning("第%d章事件提取失败: %s", no, e)
         return ch
+
+    def _extract_events(self, no: int, content: str) -> List[str]:
+        """提取本章关键剧情事件（flash，失败返回空不阻塞）。"""
+        r = self.adapter.generate(EVENT_TMPL.format(no=no, content=content[:6000]),
+                                  model=settings.LLM_MODEL_CHAPTER, system=EVENT_SYS,
+                                  max_tokens=400, temperature=0.1)
+        return [ln.strip() for ln in r.text.splitlines()
+                if ln.strip() and len(ln.strip()) > 8][:5]
 
     def _post_chapter(self, chapter_id: int, title: str, no: int,
                       polish: bool = True):
