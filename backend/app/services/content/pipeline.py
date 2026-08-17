@@ -34,16 +34,19 @@ OUTLINE_TMPL = """基于以下题材模板，为长篇小说《{title}》创作�
 1. 先给"## 主要角色表"，每个角色严格用此格式一行一个：
    - **姓名**｜年龄｜身份/学历｜关系｜初始住处｜关键道具
 2. 再给"## 称谓约定"：写明主要人物之间如何互相称呼（尤其同辈亲属对长辈的统一叫法，如兄弟间谈论母亲一律用"咱妈"；谁叫谁的小名/外号），全书所有对话必须遵守
-3. 再给"## 章节大纲"，逐章列出（格式：第N章 标题 - 情节 - 本章冲突点 - 章末钩子）
-4. 节拍要求（这是重点）：
+3. 再给"## 情节线"：把全书拆成 2-4 条情节线（如分房线/前程线/感情线），每条线单独一段，格式：
+   - **线名**｜涉及章节（如 1-7,12,18）｜各章在线上的功能（第N章=抛出/铺垫/推进/低谷/交汇/回收，逐章列）｜与其他线的交汇点（第N章与X线交汇，写明怎么交汇）
+   要求全书关键悬念都挂在某条线上，不允许有"孤章"
+4. 再给"## 章节大纲"，逐章列出（格式：第N章 标题 - 情节 - 本章冲突点 - 章末钩子）
+5. 节拍要求（这是重点）：
    - 每章必须有明确的冲突点或情感张力（误会、分歧、难处、反常迹象），不允许"纯过日子"的平章
    - 每章结尾必须有钩子：悬念（发现秘密的一半）、情感爆发前夜、两难抉择留白，三选一
    - 每3-5章安排一次小高潮（矛盾激化/真相揭露一角/关系破裂或和解）
    - 全书安排2-3次大高潮，高潮前3-5章埋伏笔线索
    - 情绪节奏遵循"压抑-释放"循环：憋屈的戏不能连压超过3章，之后必须给读者一口气顺出来的释放（和解、澄清、撑腰、团聚）
    - 悬念账本：每个关键悬念（名额、秘密、误会）在首次出现的章节标注【抛出】，在解决的章节标注【回收】；若主角接连遭遇多重打击，必须在后续章节标注"与第N章事件同一幕后/相互呼应"，不允许抛出的悬念无声消失
-5. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
-6. 主要角色 6-10 个，姓名符合年代感和地域特色，全书不得超表新增有名人物
+6. 标注关键状态变化点（角色生死/道具归属/住处变动）所在章节
+7. 主要角色 6-10 个，姓名符合年代感和地域特色，全书不得超表新增有名人物
 直接输出大纲文本。"""
 
 
@@ -135,6 +138,13 @@ def _extract_cast(outline: str) -> str:
 def _extract_appellations(outline: str) -> str:
     """从大纲提取称谓约定段落。"""
     m = re.search(r"#{1,4}\s*(?:[一二三四五六\d]+[、.．]\s*)?称谓约定(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
+                  outline, re.S)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_storylines(outline: str) -> str:
+    """从大纲提取情节线段落（生成时注入：让每章看见自己所在的线）。"""
+    m = re.search(r"#{1,4}\s*(?:[一二三四五六\d]+[、.．]\s*)?情节线(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
                   outline, re.S)
     return m.group(1).strip() if m else ""
 
@@ -258,13 +268,15 @@ class ContentPipeline:
         cast = _extract_cast(book.outline)
         cast_names = _extract_cast_names(cast)
         appellations = _extract_appellations(book.outline)
+        storylines = _extract_storylines(book.outline)
         prev = self.db.query(Chapter).filter_by(book_id=book_id, no=no - 1).first()
         prev_tail = prev.content[-800:] if prev and prev.content else ""
         next_brief = self._chapter_brief(book.outline, no + 1) if no < book.total_chapters else ""
         result = gen.generate(no, theme_prompt, brief,
                               cast=cast, cast_names=cast_names,
                               prev_tail=prev_tail, next_brief=next_brief,
-                              appellations=appellations, preset=None)
+                              appellations=appellations, storylines=storylines,
+                              preset=None)
         content = result["content"]
         ch = self.db.query(Chapter).filter_by(book_id=book_id, no=no).first()
         if not ch:

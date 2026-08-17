@@ -172,7 +172,7 @@ class ChapterGenerator:
     def generate(self, chapter: int, theme: str, brief: str,
                  cast: str = "", cast_names: Optional[List[str]] = None,
                  prev_tail: str = "", next_brief: str = "",
-                 appellations: str = "",
+                 appellations: str = "", storylines: str = "",
                  preset: Optional[List[Dict]] = None) -> Dict:
         """生成一章并做一致性校验。返回 {content, conflicts, retries, words}
 
@@ -181,6 +181,7 @@ class ChapterGenerator:
         prev_tail: 上一章结尾（衔接上下文）
         next_brief: 下一章大纲（前瞻约束：本章埋的钩子必须与之兼容）
         appellations: 称谓约定（对话称呼必须遵守）
+        storylines: 情节线结构（本章必须承接所在线索的前序节点）
         """
         memory = self.store.snapshot()
         mem_block = (f"\n【已确立的故事事实（必须严格遵守）】\n{memory}\n" if memory else "")
@@ -188,11 +189,14 @@ class ChapterGenerator:
                       f"人物姓名、关系、住处、道具必须与表内一致）】\n{cast}\n" if cast else "")
         app_block = (f"\n【称谓约定（人物对话中的互相称呼必须严格遵守，不得混用）】\n{appellations}\n"
                      if appellations else "")
+        line_block = (f"\n【全书情节线（本章是线上的一个节点：必须承接线上前序章节的事件与情绪，"
+                      f"不得让所在线索在本章断裂；到达交汇点的章节要写出线之间的呼应）】\n{storylines}\n"
+                      if storylines else "")
         prev_block = (f"\n【上一章结尾（本章须与之衔接）】\n…{prev_tail}\n" if prev_tail else "")
         next_block = (f"\n【下一章大纲（前瞻约束）】\n{next_brief}\n"
                       f"本章如需埋钩子或让人物做出具体约定/计划，必须与下一章大纲兼容，"
                       f"不得自创与之冲突的行程或承诺。\n" if next_brief else "")
-        prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{app_block}{mem_block}"
+        prompt = (f"请创作小说第{chapter}章。\n\n【题材设定】\n{theme}{cast_block}{app_block}{line_block}{mem_block}"
                   f"{prev_block}{next_block}\n【本章大纲】\n{brief}\n\n要求：只写正文，2500-3500字，遵循事实与角色表，"
                   f"与上一章结尾自然衔接。"
                   f"呼应要求：本章如揭示真相、推进矛盾或处理与前文同类的事件，必须明确呼应【已确立的故事事实】中的相关事件"

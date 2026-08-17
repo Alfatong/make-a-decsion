@@ -23,6 +23,9 @@ EDITOR_TMPL = """通读长篇小说《{title}》的第{s}-{e}章（连续章节�
 【称谓约定】
 {appellations}
 
+【全书情节线（校验基准：每条线的相邻节点章之间必须有承接）】
+{storylines}
+
 【第{s}-{e}章正文】
 {block}
 
@@ -34,6 +37,7 @@ A. 细节错误（可自动修复）：
    - 时间线错误：季节/时辰/日期前后冲突
    - 事件矛盾：同一事件/悬念在不同章节的指称或结果不一致（如前一章说"分房名额被压下"，后一章说成"夜大名额被挡"；前一章说某人不知情，后一章写他早就知道）
    - 悬念失联：前文已抛出的事件/悬念（名额被压、秘密发现一半、未赴的约）在本块后续章节中被丢弃——既不推进也不呼应，各说各话（注意：两个独立事件本身合理，缺的是它们之间的呼应句；修复方向是补呼应，不是删事件）
+   - 线索断裂：对照【全书情节线】，某条线上相邻节点章之间没有承接（线上前一章的事件/情绪在本章毫无延续），或交汇点章节没写出线之间的呼应
 B. 节奏问题（只报告）：哪一章平淡无冲突、章末无钩子、连压3章以上无释放
 
 输出 JSON（严格遵守，不要输出任何其他文字）：
@@ -79,9 +83,10 @@ class EditorPass:
         chapters.sort(key=lambda c: c.no)
         if not chapters:
             return {"detail_fixed": 0, "pace_issues": []}
-        from .pipeline import _extract_cast, _extract_appellations
+        from .pipeline import _extract_cast, _extract_appellations, _extract_storylines
         cast = _extract_cast(book.outline)
         appellations = _extract_appellations(book.outline)
+        storylines = _extract_storylines(book.outline)
 
         all_detail: List[Dict] = []
         all_pace: List[Dict] = []
@@ -91,6 +96,7 @@ class EditorPass:
             text = "\n\n".join(f"=== 第{c.no}章 ===\n{c.content}" for c in block)
             prompt = EDITOR_TMPL.format(title=book.title, s=block[0].no, e=block[-1].no,
                                         cast=cast[:1500], appellations=appellations or "（无）",
+                                        storylines=storylines or "（无）",
                                         block=text[:18000])
             done = False
             for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
