@@ -35,6 +35,8 @@ class Book(Base):
     free_chapters = Column(Integer, default=5)            # 免费章数
     price_cents = Column(Integer, default=199)            # 整书买断价（分）
     chapter_price_cents = Column(Integer, default=10)     # 单章价（分）
+    market = Column(String(16), default="cn")             # cn|overseas（海外书不进 C 端）
+    language = Column(String(8), default="zh")            # zh|en（成稿主语言）
     created_at = Column(DateTime, default=datetime.utcnow)
     theme = relationship("Theme", back_populates="books")
     chapters = relationship("Chapter", back_populates="book", order_by="Chapter.no")
@@ -49,6 +51,10 @@ class Chapter(Base):
     title = Column(String(128), default="")
     brief = Column(String(200), default="")               # 一句话提要
     content = Column(Text, default="")
+    # 海外生产分支：原稿备份 / 编辑通读修订稿 / 西语译稿（国内书保持为空字符串）
+    raw_content = Column(Text, default="")                # 首次修订前的原稿备份
+    edited_content = Column(Text, default="")             # 编辑通读/建议应用后的修订稿
+    es_content = Column(Text, default="")                 # 西班牙语译稿
     word_count = Column(Integer, default=0)
     # 一致性校验 + 机审结果
     consistency_conflicts = Column(JSON, default=list)    # 记忆层校验冲突
@@ -84,6 +90,19 @@ class ReviewRecord(Base):
     label = Column(String(32), default="")
     detail = Column(Text, default="")
     reviewer = Column(String(64), default="system")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class EditSuggestion(Base):
+    """海外书试读修改建议（挑剔读者 pass 产出，人工应用/忽略）"""
+    __tablename__ = "edit_suggestions"
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey("books.id"))
+    chapter_no = Column(Integer, nullable=False)           # 第几章
+    issue_zh = Column(Text, default="")                    # 中文问题说明（给不懂英文的站长看）
+    excerpt = Column(Text, default="")                     # 原文中需修改的精确片段（逐字子串）
+    replacement = Column(Text, default="")                 # 建议替换成的英文文本
+    status = Column(String(16), default="pending")         # pending|applied|rejected
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

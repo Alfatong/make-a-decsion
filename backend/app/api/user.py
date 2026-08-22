@@ -93,11 +93,11 @@ def search(q: str, db: Session = Depends(get_db)):
         return ok({"books": [], "chapters": []})
     like = f"%{q}%"
     books = db.query(Book).filter(
-        Book.status == "on_shelf",
+        Book.status == "on_shelf", Book.market == "cn",
         (Book.title.like(like)) | (Book.intro.like(like))
     ).all()
     chapters = (db.query(Chapter).join(Book, Chapter.book_id == Book.id)
-                .filter(Book.status == "on_shelf",
+                .filter(Book.status == "on_shelf", Book.market == "cn",
                         Chapter.review_status == "manual_pass",
                         Chapter.title.like(like))
                 .limit(20).all())

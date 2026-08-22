@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>海外小说生产控制台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Microsoft YaHei", -apple-system, sans-serif; background: #f4f5f7; color: #222; }
+  header { background: #1f2937; color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .token-box { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  header input { padding: 6px 10px; border-radius: 6px; border: 1px solid #4b5563; background: #374151; color: #fff; width: 260px; }
+  main { max-width: 1100px; margin: 20px auto; padding: 0 16px; }
+  .card { background: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card h2 { font-size: 16px; margin-bottom: 12px; color: #111827; }
+  button { cursor: pointer; border: none; border-radius: 6px; padding: 7px 14px; font-size: 13px; background: #2563eb; color: #fff; }
+  button:hover { opacity: .88; }
+  button.ghost { background: #e5e7eb; color: #374151; }
+  button.warn { background: #dc2626; }
+  button.ok { background: #059669; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select { padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .book-item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+  .book-item .title-line { font-weight: 600; margin-bottom: 6px; }
+  .book-item .meta { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+  .book-item .ops { display: flex; gap: 8px; flex-wrap: wrap; }
+  .sug { border: 1px solid #fde68a; background: #fffbeb; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
+  .sug.done { background: #f0fdf4; border-color: #bbf7d0; }
+  .sug.rej { background: #f9fafb; border-color: #e5e7eb; opacity: .7; }
+  .sug .issue { font-weight: 600; color: #b45309; margin-bottom: 6px; }
+  .sug pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 8px; margin: 6px 0; max-height: 160px; overflow: auto; }
+  .sug .lbl { font-size: 12px; color: #6b7280; }
+  .toast { position: fixed; top: 16px; right: 16px; background: #111827; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; display: none; z-index: 99; max-width: 420px; }
+  .muted { color: #9ca3af; font-size: 12px; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>海外小说生产控制台</h1>
+  <div class="token-box">
+    <input id="token" type="password" placeholder="Admin Token（登录后粘贴，存 localStorage）">
+    <button class="ghost" onclick="saveToken()">保存 Token</button>
+  </div>
+</header>
+<main>
+  <div class="card">
+    <h2>创建海外书</h2>
+    <div class="row">
+      <input id="bk-title" placeholder="英文书名" style="flex:1;min-width:220px">
+      <select id="bk-genre">
+        <option value="werewolf">狼人 ABO（Rejected Mate）</option>
+        <option value="ceo">霸总（Billionaire CEO）</option>
+        <option value="contract_marriage">契约婚姻（Contract Marriage）</option>
+      </select>
+      <input id="bk-chapters" type="number" placeholder="章数（默认60）" style="width:130px" min="1" max="200">
+      <label style="font-size:13px"><input id="bk-auto" type="checkbox" checked> 立即生成全书</label>
+      <button onclick="createBook()">创建</button>
+    </div>
+    <p class="muted" style="margin-top:8px">创建会先出英文全书大纲（约1-2分钟），勾选"立即生成全书"后逐章生成进后台队列。海外书不会出现在 C 端。</p>
+  </div>
+
+  <div class="card">
+    <h2>海外书列表 <button class="ghost" style="float:right" onclick="loadBooks()">刷新</button></h2>
+    <div id="book-list"><p class="muted">加载中…</p></div>
+  </div>
+
+  <div class="card" id="sug-card">
+    <h2 id="sug-title">修改建议审阅（先在上面选一本书）</h2>
+    <div id="sug-list"><p class="muted">暂无</p></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const GENRE_NAMES = { werewolf: '狼人ABO', ceo: '霸总', contract_marriage: '契约婚姻' };
+
+function token() { return localStorage.getItem('ov_token') || ''; }
+function saveToken() {
+  localStorage.setItem('ov_token', $('token').value.trim());
+  toast('Token 已保存'); loadBooks();
+}
+$('token').value = token();
+
+function toast(msg, ms = 3500) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms);
+}
+
+async function api(path, opts = {}) {
+  opts.headers = Object.assign({ 'X-Admin-Token': token() }, opts.headers || {});
+  if (opts.body) opts.headers['Content-Type'] = 'application/json';
+  const r = await fetch(path, opts);
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r;
+  }
+  const j = await r.json();
+  if (j.code !== 0) throw new Error(j.msg || ('错误码 ' + j.code));
+  return j.data;
+}
+
+async function createBook() {
+  const title = $('bk-title').value.trim();
+  if (!title) return toast('请填书名');
+  const body = {
+    title,
+    genre: $('bk-genre').value,
+    market: 'overseas',
+    language: 'en',
+    dedup_key: 'ov-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+    auto_generate: $('bk-auto').checked,
+  };
+  const ch = parseInt($('bk-chapters').value, 10);
+  if (ch > 0) body.chapters = ch;
+  try {
+    const d = await api('/admin/api/books', { method: 'POST', body: JSON.stringify(body) });
+    toast('创建成功 book_id=' + d.book_id + (d.generating ? '，全书生成已进入后台' : '，大纲已生成'));
+    $('bk-title').value = '';
+    loadBooks();
+  } catch (e) { toast('创建失败: ' + e.message, 6000); }
+}
+
+async function loadBooks() {
+  try {
+    const rows = await api('/admin/api/books');
+    const overseas = rows.filter(b => b.market === 'overseas');
+    if (!overseas.length) { $('book-list').innerHTML = '<p class="muted">暂无海外书</p>'; return; }
+    $('book-list').innerHTML = '';
+    for (const b of overseas.reverse()) renderBook(b);
+  } catch (e) { $('book-list').innerHTML = '<p class="muted">加载失败: ' + e.message + '</p>'; }
+}
+
+function renderBook(b) {
+  const div = document.createElement('div');
+  div.className = 'book-item';
+  div.innerHTML =
+    '<div class="title-line">#' + b.id + ' ' + esc(b.title) + '</div>' +
+    '<div class="meta">题材：' + esc(GENRE_NAMES[(b.theme || '').replace('overseas-', '')] || b.theme || '-') +
+    ' ｜ 状态：' + esc(b.status) + ' ｜ 章节：' + b.chapters + '/' + b.total_chapters +
+    ' ｜ 语言：' + esc(b.language || 'en') + '</div>' +
+    '<div class="ops">' +
+    '<button onclick="proofread(' + b.id + ')">触发试读</button>' +
+    '<button onclick="translateEs(' + b.id + ')">触发西语翻译</button>' +
+    '<button class="ok" onclick="exportBook(' + b.id + ',\'raw\')">下载原版</button>' +
+    '<button class="ok" onclick="exportBook(' + b.id + ',\'edited\')">下载编辑版</button>' +
+    '<button class="ok" onclick="exportBook(' + b.id + ',\'es\')">下载西语版</button>' +
+    '<button class="ghost" onclick="loadSuggestions(' + b.id + ',\'' + esc(b.title).replace(/'/g, "\\'") + '\')">审阅建议</button>' +
+    '</div>';
+  $('book-list').appendChild(div);
+}
+
+function esc(s) { return String(s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function proofread(bid) {
+  if (!confirm('触发全书试读？将同步执行（60章约数分钟），期间页面请耐心等待。')) return;
+  toast('试读进行中…（同步执行，请等待）', 60000);
+  try {
+    const d = await api('/admin/api/books/' + bid + '/proofread', { method: 'POST' });
+    toast('试读完成：新增 ' + d.suggestions + ' 条建议');
+  } catch (e) { toast('试读失败: ' + e.message, 8000); }
+}
+
+async function translateEs(bid) {
+  if (!confirm('触发西语翻译？将在后台逐章翻译（耗时较长），可稍后点"下载西语版"检查进度。')) return;
+  try {
+    await api('/admin/api/books/' + bid + '/translate_es', { method: 'POST' });
+    toast('西语翻译已在后台启动');
+  } catch (e) { toast('触发失败: ' + e.message, 6000); }
+}
+
+async function exportBook(bid, version) {
+  try {
+    const r = await fetch('/admin/api/books/' + bid + '/export?version=' + version,
+      { headers: { 'X-Admin-Token': token() } });
+    if (!r.ok) {
+      let msg = 'HTTP ' + r.status;
+      try { const j = await r.json(); msg = j.msg || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('content-disposition') || '';
+    const m = cd.match(/filename\*=UTF-8''([^;]+)/);
+    const fname = m ? decodeURIComponent(m[1]) : ('book' + bid + '_' + version + '.txt');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { toast('导出失败: ' + e.message, 6000); }
+}
+
+async function loadSuggestions(bid, title) {
+  $('sug-title').textContent = '修改建议审阅：#' + bid + ' ' + title;
+  try {
+    const rows = await api('/admin/api/books/' + bid + '/suggestions');
+    if (!rows.length) { $('sug-list').innerHTML = '<p class="muted">暂无建议，可先点"触发试读"</p>'; return; }
+    $('sug-list').innerHTML = '';
+    for (const s of rows) renderSug(s);
+    $('sug-card').scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { $('sug-list').innerHTML = '<p class="muted">加载失败: ' + e.message + '</p>'; }
+}
+
+function renderSug(s) {
+  const div = document.createElement('div');
+  div.className = 'sug' + (s.status === 'applied' ? ' done' : s.status === 'rejected' ? ' rej' : '');
+  const statusZh = { pending: '待处理', applied: '已应用', rejected: '已忽略' }[s.status] || s.status;
+  div.innerHTML =
+    '<div class="issue">第' + s.chapter_no + '章 ｜ ' + esc(s.issue_zh) +
+    ' <span class="muted">（' + statusZh + '）</span></div>' +
+    '<div class="lbl">原文片段：</div><pre>' + esc(s.excerpt) + '</pre>' +
+    '<div class="lbl">建议替换为：</div><pre>' + esc(s.replacement) + '</pre>' +
+    (s.status === 'pending'
+      ? '<div class="row"><button onclick="actSug(' + s.id + ',\'apply\',this)">应用</button>' +
+        '<button class="warn" onclick="actSug(' + s.id + ',\'reject\',this)">忽略</button></div>'
+      : '');
+  $('sug-list').appendChild(div);
+}
+
+async function actSug(sid, action, btn) {
+  btn.disabled = true;
+  try {
+    await api('/admin/api/suggestions/' + sid + '/' + action, { method: 'POST' });
+    toast(action === 'apply' ? '已应用该建议' : '已忽略');
+    const card = btn.closest('.sug');
+    if (card) {
+      card.classList.toggle('done', action === 'apply');
+      card.classList.toggle('rej', action === 'reject');
+      card.querySelectorAll('button').forEach(b => b.remove());
+    }
+  } catch (e) {
+    btn.disabled = false;
+    toast((action === 'apply' ? '应用失败: ' : '操作失败: ') + e.message, 7000);
+  }
+}
+
+loadBooks();
+</script>
+</body>
+</html>

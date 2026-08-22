@@ -120,6 +120,146 @@ BRIEF_TMPL = """用一句话（30-50字）概括这一章讲了什么，突出�
 {content}"""
 
 
+# ==================== 海外分支（market="overseas"）：英文 prompt 镜像 ====================
+# 结构与国内九道防线一一对应：角色表 / 称谓约定 / 情节线分线表 / 悬念账本 / 章节大纲 / 逐章注入。
+# 海外书默认 60 章、每章约 1500 英文词，题材公式见 OVERSEAS_GENRES。
+
+OVERSEAS_GENRES = {
+    "werewolf": """Genre formula: Werewolf ABO romance (rejected-mate paradigm).
+- World: werewolf packs with Alpha/Beta/Omega dynamics, fated mate bonds, pack hierarchy, mate mark, heat/rut cycles, Luna ceremony, rogue threats.
+- Core engine: the heroine is rejected or humiliated by her fated mate (the Alpha heir) in chapter 1-3; she leaves, grows powerful or hides a secret identity; he realizes his mistake and grovels; a rival she-wolf and pack politics supply conflict.
+- Mandatory beats: rejection scene, the bond's pull neither can fully deny, a second-chance or new-mate temptation, a pack war or rogue attack forcing alliance, public vindication of the heroine, final Luna ascension or chosen freedom.
+- Tone: visceral, possessive, high emotional stakes; sensory wolf imagery (scent, growl, mark).""",
+    "ceo": """Genre formula: Billionaire CEO romance (霸总 paradigm).
+- World: ruthless CEO male lead with a traumatic past; heroine with a hidden identity or talent; corporate warfare, family patriarchs, exes and scheming socialites.
+- Core engine: a forced proximity deal (contract engagement, debt, marriage of convenience); he is cold and controlling, she refuses to bow; misunderstandings and jealousies escalate; his possessiveness flips into devotion; he grovels after hurting her.
+- Mandatory beats: the deal signed on paper, public humiliation avenged, the heroine's secret revealed at the worst moment, a rival's scheme exposing the leads' feelings, grand gesture reconciliation.
+- Tone: glossy, sharp dialogue, power-play tension, slow-burn desire.""",
+    "contract_marriage": """Genre formula: Contract marriage romance (契约婚姻 paradigm).
+- World: two leads bound by a written marriage contract with explicit terms (duration, no feelings clause, separate rooms, public appearances); families or business interests enforce the charade.
+- Core engine: forced cohabitation breeds intimacy; small domestic moments erode the contract's clauses one by one; an ex or a family crisis tests the facade; the contract expiry date looms as the emotional deadline.
+- Mandatory beats: signing scene with enumerated terms, accidental intimacy, jealousy neither may admit, a public event where they must perform as a couple, contract expiry crisis, choosing each other without the paper.
+- Tone: warm banter, domestic detail, restrained longing.""",
+}
+
+OUTLINE_SYS_EN = ("You are a senior story editor for English web novels. You design "
+                  "serialized page-turners with rigorous structure and output structured outlines.")
+OUTLINE_TMPL_EN = """Based on the genre formula below, create the full-book outline for the English web novel "{title}" ({n} chapters total).
+
+[Genre Formula]
+{theme_prompt}
+
+Requirements:
+1. Start with "## Main Cast": one line per character, strictly in this format:
+   - **Name** | Age | Role/Identity | Relationship to leads | Initial situation | Key item
+2. Then "## Naming Conventions": state exactly how the main characters address each other (nicknames, titles, who calls the heroine what, how pack/company ranks are addressed). All dialogue in the whole book must obey these conventions.
+3. Then "## Plot Lines": split the book into 2-4 plot lines (e.g. mate-bond line / revenge line / pack-politics line). One paragraph per line, format:
+   - **Line name** | Chapters involved (e.g. 1-7,12,18) | Function of each chapter on the line (Chapter N = setup/build/escalation/low point/collision/payoff, listed chapter by chapter) | Intersections with other lines (at Chapter N it collides with line X, state how)
+   Every key mystery of the book must hang on some line; no orphan chapters allowed.
+4. Then "## Suspense Ledger": list every key mystery/secret/misunderstanding; mark the chapter where it is first planted with [SETUP] and the chapter where it is resolved with [PAYOFF]. If the heroine suffers stacked blows, later chapters must note "echoes Chapter N"; no planted mystery may silently vanish.
+5. Then "## Chapter Outline": chapter by chapter, format: Chapter N. Title - Plot - Conflict of the chapter - Ending hook
+6. Pacing requirements (this is the priority):
+   - Every chapter must have a clear conflict or emotional tension; no flat filler chapters
+   - Every chapter must end on a hook: a half-revealed secret, the eve of an emotional blowup, or an unresolved dilemma
+   - A mini-climax every 3-5 chapters (escalation / partial truth reveal / rupture or reconciliation)
+   - 2-3 grand climaxes across the book, with foreshadowing planted 3-5 chapters ahead
+   - Tension-release cycle: never suppress the heroine for more than 3 consecutive chapters without a release (vindication, backup, reunion)
+7. Mark the chapters where key state changes happen (deaths, item ownership, relationship status).
+8. 6-10 main characters with names fitting the genre; the book must not introduce named characters beyond the cast sheet.
+Output the outline text only."""
+
+OUTLINE_CHECK_SYS_EN = ("You are an outline proofreader hunting cross-chapter factual drift. "
+                        "Report only confirmed contradictions.")
+OUTLINE_CHECK_TMPL_EN = """Proofread this web-novel outline for cross-chapter consistency.
+
+[Full Outline]
+{outline}
+
+Look specifically for:
+1. Factual drift: the same event/mystery/object is described inconsistently across chapters (e.g. Chapter 4 says the mate mark faded, Chapter 9 treats it as intact; a character is said not to know a secret, later chapters show he knew all along).
+2. Confusing duplicate beats: adjacent chapters give the same character multiple setbacks of the same nature with different wording — readers will conflate them; report and suggest merging or clearly separating them.
+Rules:
+1. Report only confirmed contradictions or clearly confusable beats; independent events with different settings/opponents are fine.
+2. When in doubt, do not report.
+3. Output JSON only (no other text): {{"issues":[{{"chapters":"chapter numbers involved","desc":"contradiction (under 40 words)","fix":"which version to unify to (under 30 words)"}}]}}
+4. If there are no issues, output an empty issues array."""
+
+OUTLINE_FIX_TMPL_EN = """Revise this web-novel outline. The proofreader found the cross-chapter factual drifts below; fix them one by one (unify the wording across chapters, keep the plot direction unchanged):
+
+[Issue List]
+{issues}
+
+[Full Outline (to revise)]
+{outline}
+
+Requirements: only change the chapters involved in the issues; keep all other chapters untouched; keep the outline's original structure (Main Cast / Naming Conventions / Plot Lines / Suspense Ledger / Chapter Outline). Output the complete revised outline directly."""
+
+INTRO_SYS_EN = "You are a web-novel editor writing blurbs that hook readers in three lines."
+INTRO_TMPL_EN = """Write a blurb (80-120 words) for the English web novel "{title}".
+
+[Full Outline]
+{outline}
+
+Requirements: punchy, sensory, led by the heroine's wound and the central conflict; make readers need to click chapter 1. No ending spoilers. Do not start with "This book tells". Output the blurb text only."""
+
+EVENT_SYS_EN = "You are a plot recorder. Summarize plot events in one accurate sentence each, no commentary."
+EVENT_TMPL_EN = """Extract 3-5 key plot events from the chapter below, one sentence each (who did what, with what result).
+
+Requirements:
+1. Record only events that matter for later plot (secrets revealed, deals made, relationship shifts, ownership changes, major decisions)
+2. Use the exact nouns from the text for objects, deals and results; never paraphrase them
+3. One event per line, no numbering, no commentary
+
+[Chapter {no} Text]
+{content}"""
+
+POLISH_SYS_EN = ("You are a veteran web-novel line editor. You kill AI-flavored prose "
+                 "without touching the plot.")
+POLISH_TMPL_EN = """Below is the draft of Chapter {no} of the English web novel "{title}". Polish and rewrite it.
+
+[Style Sample (learn the feel, do not copy the content)]
+{style_sample}
+
+[Polish Requirements]
+1. Plot, characters, dialogue direction and factual details stay exactly the same; polish only at the sentence level
+2. Kill AI-flavored prose: cut filler hedges ("as if", "a wave of warmth", "couldn't help but"), stacked adjectives, and generic metaphors
+3. Break long sentences; one sentence does one thing; dialogue must be short, sharp, and carry each character's temper
+4. Add one concrete sensory beat every ~300 words — a gesture, a texture, a sound, a smell — chosen from objects already present in the chapter; invent no new plot
+5. Vary paragraph density; heavy emotional moments get short paragraphs
+6. The chapter must end on a hook: an unlanded thought, an off-note sound, an unfinished sentence
+7. Keep the total length at 85%-115% of the draft
+Output the polished full text directly, no title, no commentary.
+
+[Draft]
+{draft}"""
+
+STYLE_SAMPLE_EN = """The rejection tasted like iron. Kaia stood in the center of the gathering hall, the bond-thread between her and Darius snapping taut, then slack, then gone — a phantom limb where her whole future had been.
+"I, Darius Thorn, Alpha heir of the Blackridge Pack, reject you." His voice didn't shake. Hers did.
+The pack watched. Nobody moved. Somewhere behind the Alpha's shoulder, Liora smiled into her wine.
+Kaia lifted her chin. "Then keep your crown," she said. "I'll keep my name."
+She walked out before her knees could buckle, and the night air outside bit her lungs like it was glad she was free."""
+
+BRIEF_SYS_EN = "You are a web-novel editor. Summarize a chapter in one sentence."
+BRIEF_TMPL_EN = """Summarize this chapter in one sentence (15-30 words), highlighting the concrete event so a new reader knows this chapter's hook. Output the sentence only, no "This chapter tells".
+
+[Chapter Text]
+{content}"""
+
+CHAPTER_SYS_EN = ("You are a bestselling English web-novel author. Your prose is visceral and "
+                  "addictive, and you follow the given story facts strictly.")
+CHAPTER_TMPL_EN = """Write Chapter {chapter} of the web novel.
+
+[Genre Setting]
+{theme}{cast_block}{app_block}{line_block}{mem_block}{prev_block}{next_block}
+[This Chapter's Outline]
+{brief}
+
+Requirements: write only the chapter body, around 1500 English words (1300-1800 words), follow the facts and the cast sheet strictly, connect naturally with the previous chapter's ending.
+Echo requirement: if this chapter reveals a truth, escalates a conflict, or handles an event of the same kind as before, it must explicitly echo the related events in [Established Story Facts] (mention, contrast, or link the hidden cause). No previously planted mystery may vanish without a trace.
+Output the chapter body directly."""
+
+
+
 def _parse_outline_facts(outline: str) -> List[Dict]:
     """从大纲提取结构化事实计划（角色/道具/住处初始态 + 关键变化）。
     生产可用更精细的解析或人工录入，这里提供基础实现。"""
@@ -161,6 +301,45 @@ def _extract_cast_names(cast: str) -> List[str]:
     return names
 
 
+# ---------- 海外分支：英文大纲段落提取 ----------
+def _extract_section_en(outline: str, header: str) -> str:
+    """从英文大纲提取指定小节（标题兼容 # 层级与序号前缀）。"""
+    m = re.search(r"#{1,4}\s*(?:\d+[、.．]\s*)?" + re.escape(header) +
+                  r"\b(.+?)(?:\n\s*---|\n#{1,4}\s|\Z)",
+                  outline, re.S | re.I)
+    return m.group(1).strip() if m else ""
+
+
+def _extract_cast_en(outline: str) -> str:
+    return _extract_section_en(outline, "Main Cast") or _extract_section_en(outline, "Cast")
+
+
+def _extract_appellations_en(outline: str) -> str:
+    return _extract_section_en(outline, "Naming Conventions")
+
+
+def _extract_storylines_en(outline: str) -> str:
+    return _extract_section_en(outline, "Plot Lines")
+
+
+def _extract_cast_names_en(cast: str) -> List[str]:
+    """从英文角色表提取人名（- **Darius Thorn** | 24 | ... 格式）。"""
+    names = []
+    for m in re.finditer(r"\*\*([A-Z][A-Za-z'’.\- ]{1,40}?)\*\*\s*[|｜]", cast):
+        name = m.group(1).strip()
+        if name.lower() not in ("name",) and name not in names:
+            names.append(name)
+    return names
+
+
+def _is_overseas(book) -> bool:
+    return (getattr(book, "market", None) or "cn") == "overseas"
+
+
+def _en_words(text: str) -> int:
+    return len(text.split())
+
+
 class ContentPipeline:
     def __init__(self, db: Session):
         self.db = db
@@ -174,14 +353,28 @@ class ContentPipeline:
         path = os.path.join(tempfile.gettempdir(), f"book_{book_id}_facts.db")
         return FactStore(path, str(book_id))
 
-    def create_book(self, theme_id: int, title: str, chapters: Optional[int] = None) -> Book:
+    def create_book(self, theme_id: int, title: str, chapters: Optional[int] = None,
+                    market: str = "cn", language: str = "zh") -> Book:
         theme = self.db.get(Theme, theme_id)
         if not theme:
             raise ValueError(f"题材 {theme_id} 不存在")
-        n = chapters or theme.target_chapters
+        overseas = market == "overseas"
+        n = chapters or theme.target_chapters  # 海外题材模板 target_chapters 默认 60
         # 生成全书大纲（pro 优先，pro 抖动不可用时降级 flash，保证建书不阻塞；
         # 完整性校验：残缺大纲直接重生，宁缺毋滥——595字残纲事故）
         def _outline_ok(t: str) -> bool:
+            if overseas:
+                # 英文大纲等价校验：必备小节 + 章节大纲段含完整 n 章
+                low = t.lower()
+                if not (len(t) >= 6000 and "plot lines" in low
+                        and "naming conventions" in low and "cast" in low):
+                    return False
+                sec = re.search(r"chapter outline(.+)", t, re.S | re.I)
+                if not sec:
+                    return False
+                found = set(int(m.group(1)) for m in
+                            re.finditer(r"chapter\s+(\d+)\b", sec.group(1), re.I))
+                return all(i in found for i in range(1, n + 1))
             if not (len(t) >= 2500 and "情节线" in t and "称谓约定" in t and "角色表" in t):
                 return False
             # 章节大纲段必须有完整的 n 章（防"情节线含'第30章'字样蒙混、章节大纲只有6章"事故）
@@ -190,13 +383,15 @@ class ContentPipeline:
                 return False
             found = set(int(m.group(1)) for m in re.finditer(r"第(\d+)章", sec.group(1)))
             return all(i in found for i in range(1, n + 1))
-        prompt = OUTLINE_TMPL.format(title=title, n=n, theme_prompt=theme.prompt_template)
+        outline_tmpl = OUTLINE_TMPL_EN if overseas else OUTLINE_TMPL
+        outline_sys = OUTLINE_SYS_EN if overseas else OUTLINE_SYS
+        prompt = outline_tmpl.format(title=title, n=n, theme_prompt=theme.prompt_template)
         r = None
         for attempt in range(3):
             for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
                 try:
                     r = self.adapter.generate(prompt, model=model,
-                                              system=OUTLINE_SYS, max_tokens=8000, temperature=0.7,
+                                              system=outline_sys, max_tokens=8000, temperature=0.7,
                                               retry_waits=[15, 60])
                     if _outline_ok(r.text):
                         if model != settings.LLM_MODEL_OUTLINE:
@@ -213,33 +408,40 @@ class ContentPipeline:
         outline_text = r.text
         # 大纲自检：章间事实漂移（同一事件/悬念/物件指称不一）→ 自动修订
         try:
-            outline_text = self._outline_self_check(outline_text)
+            outline_text = self._outline_self_check(outline_text, overseas=overseas)
         except Exception as e:  # noqa
             logger.warning("大纲自检跳过: %s", e)
         # 生成作品简介
         intro = ""
         try:
+            intro_tmpl = INTRO_TMPL_EN if overseas else INTRO_TMPL
+            intro_sys = INTRO_SYS_EN if overseas else INTRO_SYS
             ri = self.adapter.generate(
-                INTRO_TMPL.format(title=title, outline=outline_text[:2000]),
-                model=settings.LLM_MODEL_CHAPTER, system=INTRO_SYS,
+                intro_tmpl.format(title=title, outline=outline_text[:2000]),
+                model=settings.LLM_MODEL_CHAPTER, system=intro_sys,
                 max_tokens=300, temperature=0.7)
             intro = ri.text.strip()
         except Exception as e:  # noqa
             logger.warning("简介生成失败: %s", e)
         book = Book(theme_id=theme_id, title=title, intro=intro, outline=outline_text,
-                    status="draft", total_chapters=n, ai_label=True)
+                    status="draft", total_chapters=n, ai_label=True,
+                    market=market, language=("en" if overseas and language == "zh" else language))
         self.db.add(book); self.db.commit(); self.db.refresh(book)
-        logger.info("创建书籍 id=%s 大纲 %d 字", book.id, len(outline_text))
+        logger.info("创建书籍 id=%s market=%s 大纲 %d 字", book.id, market, len(outline_text))
         return book
 
-    def _outline_self_check(self, outline: str) -> str:
+    def _outline_self_check(self, outline: str, overseas: bool = False) -> str:
         """大纲章间一致性自检 + 自动修订（pro 优先，失败降级 flash，再失败用原稿）。"""
-        check_prompt = OUTLINE_CHECK_TMPL.format(outline=outline[:14000])
+        check_tmpl = OUTLINE_CHECK_TMPL_EN if overseas else OUTLINE_CHECK_TMPL
+        check_sys = OUTLINE_CHECK_SYS_EN if overseas else OUTLINE_CHECK_SYS
+        fix_tmpl = OUTLINE_FIX_TMPL_EN if overseas else OUTLINE_FIX_TMPL
+        fix_sys = OUTLINE_SYS_EN if overseas else OUTLINE_SYS
+        check_prompt = check_tmpl.format(outline=outline[:14000])
         issues = []
         for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
             try:
                 rc = self.adapter.generate(check_prompt, model=model,
-                                           system=OUTLINE_CHECK_SYS,
+                                           system=check_sys,
                                            max_tokens=1500, temperature=0.1,
                                            retry_waits=[10, 40])
                 m = re.search(r"\{.*\}", rc.text, re.S)
@@ -255,11 +457,11 @@ class ContentPipeline:
                        [i.get("desc", "")[:30] for i in issues[:3]])
         issue_text = "\n".join(f"- 章节{i.get('chapters','')}: {i.get('desc','')}（统一为：{i.get('fix','')}）"
                                for i in issues)
-        fix_prompt = OUTLINE_FIX_TMPL.format(issues=issue_text, outline=outline)
+        fix_prompt = fix_tmpl.format(issues=issue_text, outline=outline)
         for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
             try:
                 rf = self.adapter.generate(fix_prompt, model=model,
-                                           system=OUTLINE_SYS,
+                                           system=fix_sys,
                                            max_tokens=8000, temperature=0.3,
                                            retry_waits=[10, 40])
                 if len(rf.text) > len(outline) * 0.5:
@@ -276,6 +478,8 @@ class ContentPipeline:
         book = self.db.get(Book, book_id)
         if not book:
             raise ValueError(f"书 {book_id} 不存在")
+        if _is_overseas(book):
+            return self._gen_chapter_core_en(book, no)
         store = self._fact_store(book_id)
         gen = ChapterGenerator(self.adapter, store, self.checker,
                                model=settings.LLM_MODEL_CHAPTER)
@@ -313,6 +517,90 @@ class ContentPipeline:
             logger.warning("第%d章事件提取失败: %s", no, e)
         return ch
 
+    def _gen_chapter_core_en(self, book: Book, no: int) -> Chapter:
+        """海外书章节核心生成：英文 prompt + 角色表/情节线/事实库逐章注入 + 词数重试。
+        不润色、不提要——这些走 _post_chapter。中文细节校验器不适用于英文文本，这里跳过。"""
+        book_id = book.id
+        store = self._fact_store(book_id)
+        brief = self._chapter_brief_en(book.outline, no)
+        theme_prompt = book.theme.prompt_template if book.theme else ""
+        cast = _extract_cast_en(book.outline)
+        appellations = _extract_appellations_en(book.outline)
+        storylines = _extract_storylines_en(book.outline)
+        prev = self.db.query(Chapter).filter_by(book_id=book_id, no=no - 1).first()
+        prev_tail = prev.content[-800:] if prev and prev.content else ""
+        next_brief = (self._chapter_brief_en(book.outline, no + 1)
+                      if no < book.total_chapters else "")
+        memory = store.snapshot()
+        cast_block = (f"\n[Main Cast (iron rule: only these characters; no new named characters. "
+                      f"Names, relationships and items must match the sheet)]\n{cast}\n" if cast else "")
+        app_block = (f"\n[Naming Conventions (dialogue address must obey)]\n{appellations}\n"
+                     if appellations else "")
+        line_block = (f"\n[Plot Lines (this chapter is a node on a line: carry forward the line's "
+                      f"prior events and emotions; at collision chapters write the lines echoing)]\n"
+                      f"{storylines}\n" if storylines else "")
+        mem_block = (f"\n[Established Story Facts (must obey)]\n{memory}\n" if memory else "")
+        prev_block = (f"\n[Previous Chapter Ending (this chapter must connect)]\n…{prev_tail}\n"
+                      if prev_tail else "")
+        next_block = (f"\n[Next Chapter Outline (forward constraint)]\n{next_brief}\n"
+                      f"Any hook planted or concrete promise made in this chapter must be compatible "
+                      f"with the next chapter's outline.\n" if next_brief else "")
+        prompt = CHAPTER_TMPL_EN.format(
+            chapter=no, theme=theme_prompt, cast_block=cast_block, app_block=app_block,
+            line_block=line_block, mem_block=mem_block, prev_block=prev_block,
+            next_block=next_block, brief=brief)
+        # 词数重试：目标约 1500 词，低于 900 词视为过短重生，低于 500 词多轮后报错
+        content = ""
+        for attempt in range(3):
+            r = self.adapter.generate(prompt, model=settings.LLM_MODEL_CHAPTER,
+                                      system=CHAPTER_SYS_EN,
+                                      max_tokens=4000, temperature=0.75)
+            content = r.text.strip()
+            if _en_words(content) >= 900:
+                break
+            logger.warning("第%d章第%d次生成过短(%d词)，重试", no, attempt + 1, _en_words(content))
+        if _en_words(content) < 500:
+            raise RuntimeError(f"第{no}章多次生成仍过短（{_en_words(content)}词）")
+        ch = self.db.query(Chapter).filter_by(book_id=book_id, no=no).first()
+        if not ch:
+            ch = Chapter(book_id=book_id, no=no)
+            self.db.add(ch)
+        ch.content = content
+        ch.word_count = _en_words(content)
+        ch.consistency_conflicts = []
+        ch.review_status = "pending"
+        self.db.commit(); self.db.refresh(ch)
+        # 章节事件入库：后续章节生成时能看到"已发生的剧情"
+        try:
+            for ev in self._extract_events_en(no, content):
+                store.add("event", "plot", f"Chapter {no} event", ev,
+                          chapter=no, source="outline")
+        except Exception as e:  # noqa
+            logger.warning("第%d章英文事件提取失败: %s", no, e)
+        return ch
+
+    @staticmethod
+    def _chapter_brief_en(outline: str, no: int) -> str:
+        """从英文大纲取第 no 章的一行提要（防 Chapter 1 误配 Chapter 10）。"""
+        prefix = f"chapter {no}"
+        for line in outline.splitlines():
+            s = line.strip().lstrip("*- ").strip()
+            if s.lower().startswith(prefix):
+                rest = s[len(prefix):]
+                if not rest or not rest[0].isdigit():
+                    return s.rstrip("*").strip()
+            if s.startswith(f"{no}."):
+                return s.rstrip("*").strip()
+        return f"Chapter {no}"
+
+    def _extract_events_en(self, no: int, content: str) -> List[str]:
+        """英文章节关键剧情事件提取（失败不阻塞）。"""
+        r = self.adapter.generate(EVENT_TMPL_EN.format(no=no, content=content[:6000]),
+                                  model=settings.LLM_MODEL_CHAPTER, system=EVENT_SYS_EN,
+                                  max_tokens=400, temperature=0.1)
+        return [ln.strip() for ln in r.text.splitlines()
+                if ln.strip() and len(ln.strip()) > 12][:5]
+
     def _extract_events(self, no: int, content: str) -> List[str]:
         """提取本章关键剧情事件（flash，失败返回空不阻塞）。"""
         r = self.adapter.generate(EVENT_TMPL.format(no=no, content=content[:6000]),
@@ -327,29 +615,41 @@ class ContentPipeline:
         ch = self.db.get(Chapter, chapter_id)
         if not ch or not ch.content:
             return
+        overseas = _is_overseas(ch.book) if ch.book else False
         # 润色 pass（pro 抖动时登记，等补跑）
         if polish:
             try:
-                polished = self.polish_text(title, no, ch.content)
-                ch.content = polished
-                ch.word_count = len(re.sub(r"\s", "", polished))
+                if overseas:
+                    polished = self.polish_text_en(title, no, ch.content)
+                    ch.content = polished
+                    ch.word_count = _en_words(polished)
+                else:
+                    polished = self.polish_text(title, no, ch.content)
+                    ch.content = polished
+                    ch.word_count = len(re.sub(r"\s", "", polished))
                 self.db.commit()
             except Exception as e:  # noqa
                 logger.warning("第%d章润色失败，用初稿: %s", no, e)
         # 章节一句话提要
         try:
-            ch.brief = self.gen_brief(ch.content)
+            ch.brief = (self.gen_brief_en(ch.content) if overseas
+                        else self.gen_brief(ch.content))
             self.db.commit()
         except Exception as e:  # noqa
             logger.warning("第%d章提要生成失败: %s", no, e)
-        # 机审
-        try:
-            res = self.review.review_text(ch.content[:3000])
-            ch.review_label = res.get("label", "")
-            ch.review_status = "machine_hit" if res.get("hit") else "machine_pass"
+        # 机审（海外书面向海外市场，不走国内 TMS 内容安全审核，直接标记通过）
+        if overseas:
+            ch.review_label = "overseas-skip"
+            ch.review_status = "machine_pass"
             self.db.commit()
-        except Exception as e:  # noqa
-            logger.warning("第%d章机审失败: %s", no, e)
+        else:
+            try:
+                res = self.review.review_text(ch.content[:3000])
+                ch.review_label = res.get("label", "")
+                ch.review_status = "machine_hit" if res.get("hit") else "machine_pass"
+                self.db.commit()
+            except Exception as e:  # noqa
+                logger.warning("第%d章机审失败: %s", no, e)
 
     def generate_chapter(self, book_id: int, no: int, polish: bool = True) -> Chapter:
         """单章完整生成（同步版，人工单章场景用）。"""
@@ -377,6 +677,25 @@ class ContentPipeline:
                                   model=settings.LLM_MODEL_CHAPTER,
                                   system=BRIEF_SYS, max_tokens=120, temperature=0.5)
         return r.text.strip().strip('"').strip()[:80]
+
+    def polish_text_en(self, title: str, no: int, draft: str) -> str:
+        """英文润色（海外书，质感优先用 Pro）。"""
+        r = self.adapter.generate(
+            POLISH_TMPL_EN.format(title=title, no=no,
+                                  style_sample=STYLE_SAMPLE_EN, draft=draft),
+            model=settings.LLM_MODEL_OUTLINE,
+            system=POLISH_SYS_EN, max_tokens=6000, temperature=0.6)
+        text = r.text.strip()
+        if _en_words(text) < _en_words(draft) * 0.5:
+            raise RuntimeError("润色结果异常短，丢弃")
+        return text
+
+    def gen_brief_en(self, content: str) -> str:
+        """英文章节一句话提要（15-30 词）。"""
+        r = self.adapter.generate(BRIEF_TMPL_EN.format(content=content[:2500]),
+                                  model=settings.LLM_MODEL_CHAPTER,
+                                  system=BRIEF_SYS_EN, max_tokens=120, temperature=0.5)
+        return r.text.strip().strip('"').strip()[:200]
 
     def generate_book(self, book_id: int, max_chapters: Optional[int] = None) -> Dict:
         """流水线生成全书：
@@ -440,6 +759,7 @@ class ContentPipeline:
         pool.shutdown(wait=True)  # 等润色/提要/机审全部落地
         book = self.db.get(Book, book_id)  # refresh（后处理线程改过章节）
         book.status = "reviewing"; self.db.commit()
+        overseas = _is_overseas(book)
         # 编辑通读 pass：抓跨章细节问题并自动修复，节奏问题记入审计报告
         try:
             from .editor import EditorPass
@@ -450,25 +770,33 @@ class ContentPipeline:
         except Exception as e:  # noqa
             logger.error("编辑通读失败: %s", e)
             editor_report = None
-        # 全书一致性审计（生成后自动检验，报告入库，上架门槛依据）
-        try:
-            report = self.consistency_audit(book_id)
+        if overseas:
+            # 海外书：中文一致性审计/中文 TTS/互动节点不适用，编辑报告直接入库收尾
             if editor_report:
-                report["editor"] = editor_report
                 book = self.db.get(Book, book_id)
-                book.audit_report = report
+                book.audit_report = {"overseas": True, "editor": editor_report}
                 self.db.commit()
-            logger.info("书%d一致性审计: %s 违规%d 低覆盖%d",
-                        book_id, "PASS" if report["passed"] else "FAIL",
-                        len(report["violations"]), len(report["low_coverage"]))
-        except Exception as e:  # noqa
-            logger.error("一致性审计失败: %s", e)
-        # TTS + 互动：后台守护线程自动补齐（不阻塞任务返回）
-        try:
-            t = threading.Thread(target=self._enrich_book, args=(book_id,), daemon=True)
-            t.start()
-        except Exception as e:  # noqa
-            logger.error("TTS/互动收尾线程启动失败: %s", e)
+            logger.info("书%d海外流水线收尾：跳过中文审计与 TTS/互动", book_id)
+        else:
+            # 全书一致性审计（生成后自动检验，报告入库，上架门槛依据）
+            try:
+                report = self.consistency_audit(book_id)
+                if editor_report:
+                    report["editor"] = editor_report
+                    book = self.db.get(Book, book_id)
+                    book.audit_report = report
+                    self.db.commit()
+                logger.info("书%d一致性审计: %s 违规%d 低覆盖%d",
+                            book_id, "PASS" if report["passed"] else "FAIL",
+                            len(report["violations"]), len(report["low_coverage"]))
+            except Exception as e:  # noqa
+                logger.error("一致性审计失败: %s", e)
+            # TTS + 互动：后台守护线程自动补齐（不阻塞任务返回）
+            try:
+                t = threading.Thread(target=self._enrich_book, args=(book_id,), daemon=True)
+                t.start()
+            except Exception as e:  # noqa
+                logger.error("TTS/互动收尾线程启动失败: %s", e)
         return {"book_id": book_id, "chapters_done": done,
                 "conflict_chapters": conflicts, "failed": failed}
 

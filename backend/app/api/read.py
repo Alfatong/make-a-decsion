@@ -42,8 +42,9 @@ def _book_card(b: Book):
 
 @router.get("/home")
 def home(device_id: str = "", db: Session = Depends(get_db)):
-    """首页聚合：精选轮播 + 频道 + 书卡流 + 续读。"""
-    rows = db.query(Book).filter(Book.status == "on_shelf").all()
+    """首页聚合：精选轮播 + 频道 + 书卡流 + 续读。只出国内书（market='cn'），海外书绝不进 C 端。"""
+    rows = (db.query(Book)
+            .filter(Book.status == "on_shelf", Book.market == "cn").all())
     # 精选轮播：取最新上架的
     featured = [_book_card(b) for b in rows[:3]]
     # 频道：按题材分组
@@ -71,7 +72,7 @@ def home(device_id: str = "", db: Session = Depends(get_db)):
 @router.get("/books/{bid}")
 def book_intro(bid: int, db: Session = Depends(get_db)):
     b = db.get(Book, bid)
-    if not b or b.status != "on_shelf":
+    if not b or b.status != "on_shelf" or (b.market or "cn") != "cn":
         raise BizError(ERR_NOT_FOUND, "作品不存在或未上架")
     toc = [{"no": c.no, "title": c.title or f"第{c.no}章", "word_count": c.word_count,
             "brief": c.brief or ""}
@@ -83,7 +84,7 @@ def book_intro(bid: int, db: Session = Depends(get_db)):
 def chapter_read(bid: int, no: int, device_id: str = "", db: Session = Depends(get_db)):
     """章节正文 + tts 段时间轴 + ai_label + unlock 状态。"""
     b = db.get(Book, bid)
-    if not b or b.status != "on_shelf":
+    if not b or b.status != "on_shelf" or (b.market or "cn") != "cn":
         raise BizError(ERR_NOT_FOUND, "作品不存在或未上架")
     ch = next((c for c in b.chapters if c.no == no), None)
     if not ch or ch.review_status != "manual_pass":

@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 from ..db import get_db, Base, engine
 from ..core.response import ok, BizError, ERR_NOT_FOUND, ERR_REVIEW
-from ..models import Theme, Book, Chapter, GenTask, ReviewRecord
-from ..services.content.pipeline import ContentPipeline
+from ..models import Theme, Book, Chapter, GenTask, ReviewRecord, EditSuggestion
+from ..services.content.pipeline import ContentPipeline, OVERSEAS_GENRES
 from ..services.moderation.review import ReviewService
 from .admin_auth import verify_admin
 
@@ -58,26 +58,46 @@ def update_theme(tid: int, body: ThemeIn, db: Session = Depends(get_db)):
 
 # ---------- 生成任务 ----------
 class NewBookIn(BaseModel):
-    theme_id: int
+    theme_id: Optional[int] = None   # 海外书可空（按 genre 自动取/建题材模板）
     title: str
     chapters: Optional[int] = None
     dedup_key: str
     auto_generate: bool = False   # 是否立即逐章生成
     max_chapters: Optional[int] = None
+    # 海外生产分支
+    market: str = "cn"            # cn|overseas
+    language: str = "zh"          # zh|en
+    genre: Optional[str] = None   # 海外题材公式：werewolf|ceo|contract_marriage
 
 
 @router.post("/books")
 def create_book(body: NewBookIn, background: BackgroundTasks,
                 db: Session = Depends(get_db)):
-    """创建书籍。auto_generate=true 时逐章生成放后台任务（避免 HTTP 超时）。"""
+    """创建书籍。auto_generate=true 时逐章生成放后台任务（避免 HTTP 超时）。
+    market="overseas" 时走海外生产分支：按 genre 取/建英文题材模板（默认 60 章），
+    全程英文 prompt。"""
     if db.query(GenTask).filter_by(dedup_key=body.dedup_key).first():
         raise BizError(4301, "重复任务（dedup_key 已存在）")
+    if body.market not in ("cn", "overseas"):
+        raise BizError(4000, f"market 非法: {body.market}")
+    theme_id = body.theme_id
+    language = body.language
+    if body.market == "overseas":
+        genre = body.genre or "werewolf"
+        if genre not in OVERSEAS_GENRES:
+            raise BizError(4000, f"genre 非法: {genre}（可选 {sorted(OVERSEAS_GENRES)}）")
+        theme_id = _get_or_create_overseas_theme(db, genre)
+        if language == "zh":
+            language = "en"
+    if not theme_id:
+        raise BizError(4000, "缺少 theme_id")
     task = GenTask(task_type="new_book", dedup_key=body.dedup_key,
                    status="running", payload=body.dict())
     db.add(task); db.commit(); db.refresh(task)
     try:
         pipe = ContentPipeline(db)
-        book = pipe.create_book(body.theme_id, body.title, body.chapters)
+        book = pipe.create_book(theme_id, body.title, body.chapters,
+                                market=body.market, language=language)
         result = {"book_id": book.id, "outline_len": len(book.outline)}
         if body.auto_generate:
             _bg_generate_book(task.id, book.id, body.max_chapters)
@@ -91,6 +111,19 @@ def create_book(body: NewBookIn, background: BackgroundTasks,
         task.status = "failed"; task.error = str(e); task.finished_at = datetime.utcnow()
         db.commit()
         raise BizError(5000, f"生成失败: {e}")
+
+
+def _get_or_create_overseas_theme(db: Session, genre: str) -> int:
+    """海外题材模板：按 genre 查，不存在则用英文题材公式建一条（默认 60 章）。"""
+    name = f"overseas-{genre}"
+    t = db.query(Theme).filter_by(name=name).first()
+    if t:
+        return t.id
+    t = Theme(name=name, prompt_template=OVERSEAS_GENRES[genre],
+              weight=1.0, target_chapters=60, enabled=True)
+    db.add(t); db.commit(); db.refresh(t)
+    logger.info("创建海外题材模板 %s id=%s", name, t.id)
+    return t.id
 
 
 def _bg_generate_book(task_id: int, book_id: int, max_chapters):
@@ -234,6 +267,7 @@ def list_books(db: Session = Depends(get_db)):
     rows = db.query(Book).all()
     return ok([{"id": b.id, "title": b.title, "status": b.status,
                 "total_chapters": b.total_chapters, "intro": b.intro or "",
+                "market": b.market or "cn", "language": b.language or "zh",
                 "theme": b.theme.name if b.theme else "",
                 "chapters": len(b.chapters)} for b in rows])
 
@@ -245,8 +279,11 @@ def book_detail(bid: int, db: Session = Depends(get_db)):
         raise BizError(ERR_NOT_FOUND, "书不存在")
     return ok({"id": b.id, "title": b.title, "intro": b.intro, "outline": b.outline,
                "status": b.status, "total_chapters": b.total_chapters,
+               "market": b.market or "cn", "language": b.language or "zh",
                "chapters": [{"no": c.no, "title": c.title, "word_count": c.word_count,
                              "review_status": c.review_status,
+                             "has_edited": bool(c.edited_content),
+                             "has_es": bool(c.es_content),
                              "conflicts": c.consistency_conflicts} for c in b.chapters]})
 
 
@@ -409,3 +446,143 @@ def off_shelf_book(bid: int, db: Session = Depends(get_db)):
         raise BizError(ERR_NOT_FOUND, "书不存在")
     b.status = "off_shelf"; db.commit()
     return ok({"book_id": bid, "status": "off_shelf"})
+
+
+# ---------- 海外生产分支：试读 / 建议审阅 / 西语翻译 / 全书导出 ----------
+
+def _get_overseas_book(db: Session, bid: int) -> Book:
+    b = db.get(Book, bid)
+    if not b:
+        raise BizError(ERR_NOT_FOUND, "书不存在")
+    if (b.market or "cn") != "overseas":
+        raise BizError(4000, "该书不是海外书（market != overseas）")
+    return b
+
+
+@router.post("/books/{bid}/proofread")
+def proofread_book(bid: int, db: Session = Depends(get_db)):
+    """触发海外书试读（挑剔读者 pass，同步执行）：产出修改建议入 EditSuggestion。"""
+    _get_overseas_book(db, bid)
+    from ..services.content.proofread import ProofreadPass
+    try:
+        result = ProofreadPass(db).run(bid)
+    except Exception as e:  # noqa
+        raise BizError(5000, f"试读失败: {e}")
+    return ok({"book_id": bid, **result})
+
+
+@router.get("/books/{bid}/suggestions")
+def list_suggestions(bid: int, status: str = "", db: Session = Depends(get_db)):
+    """海外书修改建议列表（可按 status=pending|applied|rejected 过滤）。"""
+    _get_overseas_book(db, bid)
+    q = db.query(EditSuggestion).filter_by(book_id=bid)
+    if status:
+        q = q.filter_by(status=status)
+    rows = q.order_by(EditSuggestion.id).all()
+    return ok([{"id": s.id, "book_id": s.book_id, "chapter_no": s.chapter_no,
+                "issue_zh": s.issue_zh, "excerpt": s.excerpt,
+                "replacement": s.replacement, "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else ""}
+               for s in rows])
+
+
+@router.post("/suggestions/{sid}/apply")
+def apply_suggestion(sid: int, db: Session = Depends(get_db)):
+    """应用一条修改建议：校验 excerpt 是 edited_content/content 的精确子串后替换。
+    替换结果写入 edited_content（首次写前把原稿备份进 raw_content），不覆盖 content。
+    子串找不到返回 409。"""
+    s = db.get(EditSuggestion, sid)
+    if not s:
+        raise BizError(ERR_NOT_FOUND, "建议不存在")
+    if s.status != "pending":
+        raise BizError(ERR_CONFLICT, f"建议已处理（status={s.status}）", http_status=409)
+    ch = (db.query(Chapter)
+          .filter_by(book_id=s.book_id, no=s.chapter_no).first())
+    if not ch:
+        raise BizError(ERR_NOT_FOUND, f"第{s.chapter_no}章不存在")
+    base = ch.edited_content or ch.content or ""
+    if s.excerpt not in base:
+        raise BizError(ERR_CONFLICT,
+                       "excerpt 不是该章现有文本的精确子串（可能已被其他建议改过），未应用",
+                       http_status=409)
+    if not ch.raw_content:
+        ch.raw_content = ch.content
+    ch.edited_content = base.replace(s.excerpt, s.replacement, 1)
+    ch.word_count = len(ch.edited_content.split())
+    s.status = "applied"
+    db.add(ReviewRecord(chapter_id=ch.id, stage="manual", action="approve",
+                        label="proofread",
+                        detail=f"建议#{sid} 应用：{s.issue_zh[:100]}"))
+    db.commit()
+    return ok({"suggestion_id": sid, "status": "applied", "chapter_no": ch.no})
+
+
+@router.post("/suggestions/{sid}/reject")
+def reject_suggestion(sid: int, db: Session = Depends(get_db)):
+    """忽略一条修改建议。"""
+    s = db.get(EditSuggestion, sid)
+    if not s:
+        raise BizError(ERR_NOT_FOUND, "建议不存在")
+    if s.status != "pending":
+        raise BizError(ERR_CONFLICT, f"建议已处理（status={s.status}）", http_status=409)
+    s.status = "rejected"
+    ch = (db.query(Chapter)
+          .filter_by(book_id=s.book_id, no=s.chapter_no).first())
+    db.add(ReviewRecord(chapter_id=ch.id if ch else None, stage="manual",
+                        action="reject", label="proofread",
+                        detail=f"建议#{sid} 忽略：{s.issue_zh[:100]}"))
+    db.commit()
+    return ok({"suggestion_id": sid, "status": "rejected"})
+
+
+@router.post("/books/{bid}/translate_es")
+def translate_book_es_endpoint(bid: int, db: Session = Depends(get_db)):
+    """触发海外书西语翻译。章节级耗时长，放后台线程执行，前端轮询书详情看 has_es 进度。"""
+    _get_overseas_book(db, bid)
+    import threading
+    from ..db import SessionLocal
+
+    def work():
+        db2 = SessionLocal()
+        try:
+            from ..services.content.translate import translate_book_es
+            result = translate_book_es(db2, bid)
+            logger.info("书%d西语翻译完成: %s", bid, result)
+        except Exception as e:  # noqa
+            logger.error("书%d西语翻译异常: %s", bid, e)
+        finally:
+            db2.close()
+    threading.Thread(target=work, daemon=True).start()
+    return ok({"book_id": bid, "started": True})
+
+
+@router.get("/books/{bid}/export")
+def export_book(bid: int, version: str = "edited", db: Session = Depends(get_db)):
+    """导出海外书全本纯文本。version=raw|edited|es。
+    raw=原稿（raw_content 无则 content）；edited=修订稿（edited_content 无则 content）；
+    es=西语译稿（只含已译章节）。"""
+    b = _get_overseas_book(db, bid)
+    if version not in ("raw", "edited", "es"):
+        raise BizError(4000, f"version 非法: {version}（raw|edited|es）")
+    chapters = sorted(b.chapters, key=lambda c: c.no)
+    parts = []
+    for c in chapters:
+        if version == "raw":
+            body = c.raw_content or c.content
+        elif version == "edited":
+            body = c.edited_content or c.content
+        else:
+            body = c.es_content
+        if body:
+            parts.append(f"Chapter {c.no}\n\n{body.strip()}")
+    if not parts:
+        raise BizError(ERR_NOT_FOUND, f"该书没有可导出的 {version} 版本内容")
+    text = f"{b.title}\n{'=' * 40}\n\n" + "\n\n\n".join(parts) + "\n"
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    fname = f"{b.title}_{version}.txt"
+    disposition = (f"attachment; filename=\"book{bid}_{version}.txt\"; "
+                   f"filename*=UTF-8''{quote(fname)}")
+    return Response(content=text.encode("utf-8"),
+                    media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": disposition})
