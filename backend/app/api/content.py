@@ -59,7 +59,7 @@ def update_theme(tid: int, body: ThemeIn, db: Session = Depends(get_db)):
 # ---------- 生成任务 ----------
 class NewBookIn(BaseModel):
     theme_id: Optional[int] = None   # 海外书可空（按 genre 自动取/建题材模板）
-    title: str
+    title: str = ""                  # 海外书可空：自动生成英文书名
     chapters: Optional[int] = None
     dedup_key: str
     auto_generate: bool = False   # 是否立即逐章生成
@@ -91,6 +91,8 @@ def create_book(body: NewBookIn, background: BackgroundTasks,
             language = "en"
     if not theme_id:
         raise BizError(4000, "缺少 theme_id")
+    if body.market == "cn" and not body.title.strip():
+        raise BizError(4000, "国内书必须填写书名")
     task = GenTask(task_type="new_book", dedup_key=body.dedup_key,
                    status="running", payload=body.dict())
     db.add(task); db.commit(); db.refresh(task)
@@ -98,7 +100,7 @@ def create_book(body: NewBookIn, background: BackgroundTasks,
         pipe = ContentPipeline(db)
         book = pipe.create_book(theme_id, body.title, body.chapters,
                                 market=body.market, language=language)
-        result = {"book_id": book.id, "outline_len": len(book.outline)}
+        result = {"book_id": book.id, "title": book.title, "outline_len": len(book.outline)}
         if body.auto_generate:
             _bg_generate_book(task.id, book.id, body.max_chapters)
             task.status = "generating"

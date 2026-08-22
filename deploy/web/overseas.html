@@ -49,7 +49,7 @@
   <div class="card">
     <h2>创建海外书</h2>
     <div class="row">
-      <input id="bk-title" placeholder="英文书名" style="flex:1;min-width:220px">
+      <input id="bk-title" placeholder="英文书名（可留空，按题材自动生成）" style="flex:1;min-width:220px">
       <select id="bk-genre">
         <option value="werewolf">狼人 ABO（Rejected Mate）</option>
         <option value="ceo">霸总（Billionaire CEO）</option>
@@ -105,8 +105,7 @@ async function api(path, opts = {}) {
 }
 
 async function createBook() {
-  const title = $('bk-title').value.trim();
-  if (!title) return toast('请填书名');
+  const title = $('bk-title').value.trim();  // 可空：后端按题材自动生成英文书名
   const body = {
     title,
     genre: $('bk-genre').value,
@@ -119,7 +118,7 @@ async function createBook() {
   if (ch > 0) body.chapters = ch;
   try {
     const d = await api('/admin/api/books', { method: 'POST', body: JSON.stringify(body) });
-    toast('创建成功 book_id=' + d.book_id + (d.generating ? '，全书生成已进入后台' : '，大纲已生成'));
+    toast('创建成功 book_id=' + d.book_id + ' 《' + (d.title || '') + '》' + (d.generating ? '，全书生成已进入后台' : '，大纲已生成'));
     $('bk-title').value = '';
     loadBooks();
   } catch (e) { toast('创建失败: ' + e.message, 6000); }

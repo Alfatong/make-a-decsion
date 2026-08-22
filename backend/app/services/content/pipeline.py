@@ -195,6 +195,13 @@ OUTLINE_FIX_TMPL_EN = """Revise this web-novel outline. The proofreader found th
 Requirements: only change the chapters involved in the issues; keep all other chapters untouched; keep the outline's original structure (Main Cast / Naming Conventions / Plot Lines / Suspense Ledger / Chapter Outline). Output the complete revised outline directly."""
 
 INTRO_SYS_EN = "You are a web-novel editor writing blurbs that hook readers in three lines."
+TITLE_SYS_EN = ("You are a web-novel editor who names bestsellers on Dreame/GoodNovel. "
+                "Titles are short, trope-forward, and clicky.")
+TITLE_TMPL_EN = """Name an English web novel built on this genre formula:
+
+{theme_prompt}
+
+Rules: 3-8 words; front-load the trope keywords readers search for (e.g. Alpha, Rejected Mate, Billionaire, Contract Wife, Pregnant); no subtitle; no quotes; output the title only."""
 INTRO_TMPL_EN = """Write a blurb (80-120 words) for the English web novel "{title}".
 
 [Full Outline]
@@ -359,6 +366,19 @@ class ContentPipeline:
         if not theme:
             raise ValueError(f"题材 {theme_id} 不存在")
         overseas = market == "overseas"
+        # 海外书允许空书名：按题材公式自动生成英文爆款书名
+        if overseas and not (title or "").strip():
+            try:
+                rt_ = self.adapter.generate(
+                    TITLE_TMPL_EN.format(theme_prompt=theme.prompt_template[:1500]),
+                    model=settings.LLM_MODEL_CHAPTER, system=TITLE_SYS_EN,
+                    max_tokens=60, temperature=0.9)
+                title = rt_.text.strip().strip('"\'').split("\n")[0].strip()
+                logger.info("自动生成英文书名: %s", title)
+            except Exception as e:  # noqa
+                logger.warning("书名生成失败，用占位名: %s", e)
+            if not title:
+                title = f"Untitled {theme.name} Story"
         n = chapters or theme.target_chapters  # 海外题材模板 target_chapters 默认 60
         # 生成全书大纲（pro 优先，pro 抖动不可用时降级 flash，保证建书不阻塞；
         # 完整性校验：残缺大纲直接重生，宁缺毋滥——595字残纲事故）
