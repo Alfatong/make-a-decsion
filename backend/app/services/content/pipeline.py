@@ -179,20 +179,37 @@ class ContentPipeline:
         if not theme:
             raise ValueError(f"题材 {theme_id} 不存在")
         n = chapters or theme.target_chapters
-        # 生成全书大纲（pro 优先，pro 抖动不可用时降级 flash，保证建书不阻塞）
+        # 生成全书大纲（pro 优先，pro 抖动不可用时降级 flash，保证建书不阻塞；
+        # 完整性校验：残缺大纲直接重生，宁缺毋滥——595字残纲事故）
+        def _outline_ok(t: str) -> bool:
+            if not (len(t) >= 2500 and "情节线" in t and "称谓约定" in t and "角色表" in t):
+                return False
+            # 章节大纲段必须有完整的 n 章（防"情节线含'第30章'字样蒙混、章节大纲只有6章"事故）
+            sec = re.search(r"章节大纲(.+)", t, re.S)
+            if not sec:
+                return False
+            found = set(int(m.group(1)) for m in re.finditer(r"第(\d+)章", sec.group(1)))
+            return all(i in found for i in range(1, n + 1))
         prompt = OUTLINE_TMPL.format(title=title, n=n, theme_prompt=theme.prompt_template)
         r = None
-        for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
-            try:
-                r = self.adapter.generate(prompt, model=model,
-                                          system=OUTLINE_SYS, max_tokens=6000, temperature=0.7)
-                if model != settings.LLM_MODEL_OUTLINE:
-                    logger.warning("大纲生成降级到 %s（pro 不可用）", model)
+        for attempt in range(3):
+            for model in (settings.LLM_MODEL_OUTLINE, settings.LLM_MODEL_CHAPTER):
+                try:
+                    r = self.adapter.generate(prompt, model=model,
+                                              system=OUTLINE_SYS, max_tokens=8000, temperature=0.7,
+                                              retry_waits=[15, 60])
+                    if _outline_ok(r.text):
+                        if model != settings.LLM_MODEL_OUTLINE:
+                            logger.warning("大纲生成降级到 %s（pro 不可用）", model)
+                        break
+                    logger.warning("大纲不完整(%d字,第%d轮)，重试", len(r.text), attempt + 1)
+                    r = None
+                except Exception as e:  # noqa
+                    logger.warning("大纲生成 %s 失败: %s", model, e)
+            if r is not None:
                 break
-            except Exception as e:  # noqa
-                logger.warning("大纲生成 %s 失败: %s", model, e)
         if r is None:
-            raise RuntimeError("大纲生成失败（双模型均不可用）")
+            raise RuntimeError("大纲生成失败（多轮后仍不完整或双模型均不可用）")
         outline_text = r.text
         # 大纲自检：章间事实漂移（同一事件/悬念/物件指称不一）→ 自动修订
         try:

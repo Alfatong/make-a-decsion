@@ -2,34 +2,42 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>银发 AI 互动小说</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>银发小说</title>
 <style>
   :root {
     --bg: #FBF7F0; --bg2: #F4EDE1; --ink: #2E2A25; --muted: #7C7266;
     --accent: #B3541E; --accent2: #3F6C51; --hl: #FFE9B0; --rule: #E3D9C8;
-    --fs: 22px; /* 适老大字号 */
+    --fs: 22px; /* 适老大字号：全站字号基准，改它即整体缩放 */
     --lh: 2.0;
+    /* 相对字号梯队：全部随 --fs 缩放，兼容系统大字体 */
+    --fs-xs: calc(var(--fs) * 0.64);
+    --fs-s:  calc(var(--fs) * 0.73);
+    --fs-m:  calc(var(--fs) * 0.86);
+    --fs-l:  calc(var(--fs) * 0.95);
+    --fs-xl: calc(var(--fs) * 1.09);
+    --fs-xxl: calc(var(--fs) * 1.18);
   }
   * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
   body { background:var(--bg); color:var(--ink); font-family:"PingFang SC","Microsoft YaHei",sans-serif; font-size:var(--fs); line-height:var(--lh); }
   .wrap { max-width:760px; margin:0 auto; padding:0 18px 160px; }
-  header.top { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:14px 18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; z-index:10; }
-  header.top .t { font-size:20px; font-weight:700; }
-  header.top .mode-btn { font-size:16px; background:var(--bg2); border:1px solid var(--rule); border-radius:8px; padding:6px 12px; color:var(--muted); }
-  .ai-tag { display:inline-block; font-size:13px; background:var(--bg2); color:var(--muted); border:1px solid var(--rule); border-radius:99px; padding:2px 10px; margin-left:8px; vertical-align:middle; }
-  h1.book { font-size:26px; margin:24px 0 6px; }
-  .toc-item { padding:16px 8px; border-bottom:1px solid var(--rule); font-size:20px; cursor:pointer; overflow-wrap:break-word; }
+  header.top { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--rule); padding:12px 18px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; z-index:10; transition:transform 0.25s; }
+  header.top.hidden { transform:translateY(-110%); }
+  header.top .t { font-size:var(--fs-m); font-weight:700; }
+  header.top .mode-btn { font-size:var(--fs-s); background:var(--bg2); border:1px solid var(--rule); border-radius:10px; padding:12px 14px; min-height:48px; color:var(--muted); }
+  .ai-tag { display:inline-block; font-size:var(--fs-xs); background:var(--bg2); color:var(--muted); border:1px solid var(--rule); border-radius:99px; padding:2px 10px; margin-left:8px; vertical-align:middle; }
+  h1.book { font-size:var(--fs-xxl); margin:24px 0 6px; }
+  .toc-item { padding:20px 10px; min-height:56px; border-bottom:1px solid var(--rule); font-size:var(--fs-m); cursor:pointer; overflow-wrap:break-word; }
   .toc-item:active { background:var(--bg2); }
   /* 首页书籍卡 + 开始阅读大按钮 */
   .book-card { background:#fff; border:2px solid var(--rule); border-radius:14px; padding:18px; margin-bottom:14px; }
   .book-card:active { border-color:var(--accent2); }
-  .read-btn { display:block; width:100%; text-align:center; font-size:23px; font-weight:700;
-              padding:18px; margin-top:12px; border-radius:12px; border:none; cursor:pointer;
+  .read-btn { display:block; width:100%; text-align:center; font-size:var(--fs-xl); font-weight:700;
+              padding:20px; min-height:60px; margin-top:12px; border-radius:12px; border:none; cursor:pointer;
               background:var(--accent2); color:#fff; }
   .read-btn:active { opacity:0.85; }
-  .chapter-title { font-size:24px; font-weight:700; margin:22px 0 14px; text-align:center; }
+  .chapter-title { font-size:var(--fs-xl); font-weight:700; margin:22px 0 14px; text-align:center; }
   .para { margin-bottom:1.1em; text-align:justify; padding:2px 4px; border-radius:6px; transition:background 0.2s; }
   .para.active { background:var(--hl); }
   .interact { background:var(--bg2); border:1px solid var(--rule); border-radius:12px; padding:18px; margin:22px 0; }
@@ -39,53 +47,64 @@
   .resp { margin-top:14px; padding:14px; background:#fff; border-left:4px solid var(--accent2); border-radius:0 8px 8px 0; font-size:19px; }
   /* 底部控制条（大字体下可换行，不溢出） */
   .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:1px solid var(--rule); padding:10px 14px calc(10px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; flex-wrap:wrap; z-index:20; }
-  .bar button { flex:1 1 30%; min-width:88px; font-size:19px; padding:14px 8px; border-radius:10px; border:1px solid var(--rule); background:var(--bg2); color:var(--ink); }
+  .bar button { flex:1 1 30%; min-width:96px; min-height:56px; font-size:var(--fs-m); padding:14px 8px; border-radius:10px; border:1px solid var(--rule); background:var(--bg2); color:var(--ink); }
   .bar button.primary { background:var(--accent2); color:#fff; border-color:var(--accent2); }
   .bar button:disabled { opacity:0.4; }
-  .speed { display:flex; gap:4px; flex-wrap:wrap; }
-  .speed button { flex:none; font-size:15px; padding:10px 10px; min-width:0; }
+  .speed { display:flex; gap:6px; flex-wrap:wrap; }
+  .speed button { flex:none; font-size:var(--fs-s); padding:12px 14px; min-width:52px; min-height:48px; }
   .speed button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-  .loading { text-align:center; color:var(--muted); padding:60px 0; font-size:20px; }
+  .loading { text-align:center; color:var(--muted); padding:60px 0; font-size:var(--fs-m); }
   /* 加载遮罩（章节切换反馈） */
   .mask { position:fixed; inset:0; background:rgba(251,247,240,0.92); z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:center; }
   .mask .spin { width:46px; height:46px; border:5px solid var(--rule); border-top-color:var(--accent2); border-radius:50%; animation:rot 0.9s linear infinite; }
-  .mask .txt { margin-top:18px; font-size:20px; color:var(--muted); }
+  .mask .txt { margin-top:18px; font-size:var(--fs-m); color:var(--muted); }
   @keyframes rot { to { transform:rotate(360deg); } }
   /* 锁章 / 收银台 */
   .lock-box { text-align:center; padding:50px 20px; }
-  .lock-box .icon { font-size:52px; }
-  .lock-box .tip { font-size:20px; color:var(--muted); margin:16px 0 24px; }
-  .pay-btn { display:block; width:100%; font-size:21px; padding:16px; margin:12px 0; border-radius:12px; border:none; cursor:pointer; }
+  .lock-box .icon { font-size:calc(var(--fs) * 2.4); }
+  .lock-box .tip { font-size:var(--fs-m); color:var(--muted); margin:16px 0 24px; }
+  .pay-btn { display:block; width:100%; font-size:var(--fs-l); padding:18px; min-height:56px; margin:12px 0; border-radius:12px; border:none; cursor:pointer; }
   .pay-btn.buy { background:var(--accent); color:#fff; }
   .pay-btn.share { background:var(--accent2); color:#fff; }
   .pay-btn.ch { background:var(--bg2); color:var(--ink); border:2px solid var(--rule); }
   .cashier { position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:60; display:flex; align-items:flex-end; }
   .cashier .panel { background:#fff; width:100%; border-radius:16px 16px 0 0; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); }
-  .cashier .amt { font-size:34px; font-weight:700; color:var(--accent); text-align:center; margin:10px 0 20px; }
+  .cashier .amt { font-size:calc(var(--fs) * 1.55); font-weight:700; color:var(--accent); text-align:center; margin:10px 0 20px; }
   .cashier .row { display:flex; gap:10px; }
-  .err { text-align:center; color:var(--accent); padding:40px 0; font-size:19px; }
+  .err { text-align:center; color:var(--accent); padding:40px 0; font-size:var(--fs-m); }
 </style>
 </head>
 <body>
 <header class="top">
-  <span class="t" id="topTitle">银发 AI 互动小说</span>
+  <span class="t" id="topTitle">银发小说</span>
   <span>
     <button class="mode-btn" id="modeBtn" onclick="toggleMode()">标准版</button>
-    <button class="mode-btn" id="fontBtn">字号 A+</button>
+    <button class="mode-btn" id="fontBtn">字号：标准</button>
   </span>
 </header>
 <div class="wrap" id="app"><div class="loading">加载中…</div></div>
 
 <script>
 const API = '/api/v1';
-let state = { view:'home', book:null, chapter:null, fontSize:22, audio:null, playing:false, speed:1.0, segIdx:-1 };
+// 互动问答模块：老人反馈不需要，暂时下线（代码保留，改 true 即可恢复）
+const ENABLE_INTERACT = false;
+// 字号三档（适老）：标准 / 大 / 超大
+const FONT_TIERS = [ {px:22, label:'标准'}, {px:26, label:'大'}, {px:30, label:'超大'} ];
+let state = { view:'home', book:null, chapter:null, fontTier:0, audio:null, playing:false, speed:1.0, segIdx:-1 };
 const app = document.getElementById('app');
 
-// 字号切换（适老）
+// 字号切换（三档循环，记住选择）
+function applyFontTier(t){
+  state.fontTier = t;
+  document.documentElement.style.setProperty('--fs', FONT_TIERS[t].px + 'px');
+  document.getElementById('fontBtn').textContent = '字号：' + FONT_TIERS[t].label;
+  try{ localStorage.setItem('font_tier', t); }catch(e){}
+}
 document.getElementById('fontBtn').onclick = () => {
-  state.fontSize = state.fontSize >= 28 ? 22 : state.fontSize + 2;
-  document.documentElement.style.setProperty('--fs', state.fontSize + 'px');
+  applyFontTier((state.fontTier + 1) % FONT_TIERS.length);
+  track('font_change', {tier: state.fontTier});
 };
+try{ const saved = parseInt(localStorage.getItem('font_tier')); if(saved>=0 && saved<FONT_TIERS.length) applyFontTier(saved); }catch(e){}
 
 async function api(path){ const r = await fetch(API+path); const j = await r.json(); if(j.code!==0) throw new Error(j.msg); return j.data; }
 function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
@@ -108,7 +127,10 @@ async function applyMode(){
   }catch(e){}
 }
 function applyModeCfg(cfg){
-  document.documentElement.style.setProperty('--fs', cfg.font_size+'px');
+  // 用户手动选过的字号优先，不被云端模式配置覆盖
+  let hasPref = false;
+  try{ hasPref = localStorage.getItem('font_tier') !== null; }catch(e){}
+  if(!hasPref) document.documentElement.style.setProperty('--fs', cfg.font_size+'px');
   document.documentElement.style.setProperty('--lh', cfg.line_height||2.0);
 }
 async function toggleMode(){
@@ -127,29 +149,30 @@ async function reportProgress(bookId, no, pos){
 // 首页
 async function showHome(){
   state.view='home'; stopAudio();
-  document.getElementById('topTitle').textContent='银发 AI 互动小说';
+  document.getElementById('topTitle').textContent='银发小说';
+  document.querySelector('header.top').classList.remove('hidden');
   try{
     const d = await api('/home?device_id='+deviceId());
     if(!d.books.length){ app.innerHTML='<div class="err">暂无已上架作品</div>'; return; }
-    let html = `<div style="padding:14px 0"><input id="q" placeholder="搜书名 / 章节" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:19px;padding:14px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
+    let html = `<div style="padding:14px 0"><input id="q" placeholder="搜书名 / 章节" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:var(--fs-m);padding:16px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
     if(d.resume){ html += `<div class="book-card" style="background:var(--hl);border-color:var(--accent)" onclick="openChapter(${d.resume.book_id},${d.resume.chapter_no})">
       <b>《${esc(d.resume.title)}》</b>
       <button class="read-btn" style="background:var(--accent)">▶ 接着读 第 ${d.resume.chapter_no} 章</button>
     </div>`; }
-    if(d.featured && d.featured.length){ html += `<div style="font-size:16px;color:var(--muted);margin:6px 0">精选</div>` + d.featured.map(b=>`
+    if(d.featured && d.featured.length){ html += `<div style="font-size:var(--fs-s);color:var(--muted);margin:6px 0">精选</div>` + d.featured.map(b=>`
       <div class="book-card" onclick="openChapter(${b.id},1)">
-        <b style="font-size:22px">${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
-        <div style="font-size:15px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
-        ${b.intro?`<div style="font-size:17px;color:var(--ink);margin-top:6px;line-height:1.7">${esc(b.intro)}</div>`:''}
+        <b style="font-size:var(--fs)">${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
+        <div style="font-size:var(--fs-xs);color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
+        ${b.intro?`<div style="font-size:var(--fs-s);color:var(--ink);margin-top:6px;line-height:1.7">${esc(b.intro)}</div>`:''}
         <button class="read-btn">▶ 开始阅读</button>
-        <div style="text-align:center;margin-top:8px"><span style="font-size:15px;color:var(--muted)" onclick="event.stopPropagation();openBook(${b.id})">查看目录</span></div>
+        <div style="text-align:center;margin-top:8px"><span style="font-size:var(--fs-s);color:var(--muted);display:inline-block;padding:10px 16px" onclick="event.stopPropagation();openBook(${b.id})">查看目录</span></div>
       </div>`).join(''); }
     html += d.books.map(b=>`
       <div class="book-card" onclick="openChapter(${b.id},1)">
-        <b style="font-size:22px">${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
-        <div style="font-size:16px;color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
+        <b style="font-size:var(--fs)">${esc(b.title)}</b><span class="ai-tag">AI 创作</span>
+        <div style="font-size:var(--fs-s);color:var(--muted)">${esc(b.theme||'')} · 共 ${b.total_chapters} 章</div>
         <button class="read-btn">▶ 开始阅读</button>
-        <div style="text-align:center;margin-top:8px"><span style="font-size:15px;color:var(--muted)" onclick="event.stopPropagation();openBook(${b.id})">查看目录</span></div>
+        <div style="text-align:center;margin-top:8px"><span style="font-size:var(--fs-s);color:var(--muted);display:inline-block;padding:10px 16px" onclick="event.stopPropagation();openBook(${b.id})">查看目录</span></div>
       </div>`).join('');
     app.innerHTML = html;
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
@@ -160,8 +183,8 @@ async function doSearch(){
   const q = document.getElementById('q').value.trim(); if(!q) return;
   try{
     const d = await api('/search?q='+encodeURIComponent(q));
-    let html = `<div style="padding:14px 0"><input id="q" value="${esc(q)}" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:19px;padding:14px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
-    html += `<div style="font-size:16px;color:var(--muted)">搜索"${esc(q)}"</div>`;
+    let html = `<div style="padding:14px 0"><input id="q" value="${esc(q)}" onkeydown="if(event.key==='Enter')doSearch()" style="width:100%;font-size:var(--fs-m);padding:16px;border:2px solid var(--rule);border-radius:10px;background:#fff"></div>`;
+    html += `<div style="font-size:var(--fs-s);color:var(--muted)">搜索"${esc(q)}"</div>`;
     if(d.books.length) html += d.books.map(b=>`<div class="toc-item" onclick="openBook(${b.id})"><b>${esc(b.title)}</b></div>`).join('');
     if(d.chapters.length) html += d.chapters.map(c=>`<div class="toc-item" onclick="openChapter(${c.book_id},${c.no})">${esc(c.title||('第'+c.no+'章'))}</div>`).join('');
     if(!d.books.length && !d.chapters.length) html += '<div class="err">没有找到相关内容</div>';
@@ -172,15 +195,16 @@ async function doSearch(){
 // 作品目录
 async function openBook(id){
   state.view='book'; stopAudio();
+  document.querySelector('header.top').classList.remove('hidden');
   try{
     const b = await api('/books/'+id);
     state.book=b;
     document.getElementById('topTitle').textContent=b.title;
     app.innerHTML = `<h1 class="book">${esc(b.title)}<span class="ai-tag">AI 创作</span></h1>
-      <div style="color:var(--muted);font-size:16px;margin-bottom:14px">共 ${b.total_chapters} 章</div>
+      <div style="color:var(--muted);font-size:var(--fs-s);margin-bottom:14px">共 ${b.total_chapters} 章</div>
       ${b.toc.length?`<button class="read-btn" style="margin:0 0 16px" onclick="openChapter(${b.id},${b.toc[0].no})">▶ 开始阅读</button>`:''}
-      ${b.intro?`<div style="font-size:19px;background:var(--bg2);border-radius:10px;padding:16px;margin-bottom:14px;line-height:1.9">${esc(b.intro)}</div>`:''}
-      ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}${c.brief?`<div style="font-size:15px;color:var(--muted);margin-top:3px">${esc(c.brief)}</div>`:''}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
+      ${b.intro?`<div style="font-size:var(--fs-m);background:var(--bg2);border-radius:10px;padding:16px;margin-bottom:14px;line-height:1.9">${esc(b.intro)}</div>`:''}
+      ${b.toc.map(c=>`<div class="toc-item" onclick="openChapter(${b.id},${c.no})">${esc(c.title)}${c.brief?`<div style="font-size:var(--fs-xs);color:var(--muted);margin-top:3px">${esc(c.brief)}</div>`:''}</div>`).join('')||'<div class="err">暂无可读章节</div>'}`;
     window.scrollTo(0,0);
   }catch(e){ app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
 }
@@ -189,11 +213,11 @@ async function openBook(id){
 function adUnlock(bid, no){
   const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
   el.innerHTML = `<div class="panel">
-    <div style="font-size:21px;font-weight:700;text-align:center;margin-bottom:10px">广告</div>
-    <div id="adBody" style="background:var(--bg2);border-radius:10px;padding:36px 16px;text-align:center;color:var(--muted);font-size:16px;line-height:1.8">
-      广告位即将接入<br><span style="font-size:14px">（内测期间看完倒计时即可免费阅读）</span>
+    <div style="font-size:var(--fs-l);font-weight:700;text-align:center;margin-bottom:10px">广告</div>
+    <div id="adBody" style="background:var(--bg2);border-radius:10px;padding:36px 16px;text-align:center;color:var(--muted);font-size:var(--fs-s);line-height:1.8">
+      广告位即将接入<br><span style="font-size:var(--fs-xs)">（内测期间看完倒计时即可免费阅读）</span>
     </div>
-    <div id="adTimer" style="text-align:center;font-size:26px;font-weight:700;color:var(--accent);margin:16px 0">15</div>
+    <div id="adTimer" style="text-align:center;font-size:var(--fs-xxl);font-weight:700;color:var(--accent);margin:16px 0">15</div>
     <button class="pay-btn ch" id="adDone" disabled style="opacity:.5">请稍候…</button>
   </div>`;
   document.body.appendChild(el);
@@ -218,8 +242,8 @@ function adUnlock(bid, no){
 function shareUnlock(bid, no){
   const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
   el.innerHTML = `<div class="panel">
-    <div style="font-size:21px;font-weight:700;text-align:center;margin-bottom:12px">分享给朋友</div>
-    <div style="font-size:18px;line-height:2;color:var(--ink)">
+    <div style="font-size:var(--fs-l);font-weight:700;text-align:center;margin-bottom:12px">分享给朋友</div>
+    <div style="font-size:var(--fs-m);line-height:2;color:var(--ink)">
       1️⃣ 点屏幕右上角的 <b>「···」</b><br>
       2️⃣ 选「发送给朋友」或「分享到群」<br>
       3️⃣ 分享完回到这里，点下方按钮
@@ -247,9 +271,9 @@ function startPay(bid, no, type, cents){
   const label = type==='buyout' ? '买断全本' : '解锁第 '+no+' 章';
   const el=document.createElement('div'); el.className='cashier'; el.id='cashier';
   el.innerHTML = `<div class="panel">
-    <div style="font-size:20px;text-align:center;color:var(--muted)">${label}</div>
+    <div style="font-size:var(--fs-m);text-align:center;color:var(--muted)">${label}</div>
     <div class="amt">¥${(cents/100).toFixed(2)}</div>
-    <div style="font-size:15px;color:var(--muted);text-align:center;margin-bottom:16px">内测模拟支付，不产生真实扣费</div>
+    <div style="font-size:var(--fs-xs);color:var(--muted);text-align:center;margin-bottom:16px">内测模拟支付，不产生真实扣费</div>
     <div class="row">
       <button class="pay-btn ch" style="flex:1" onclick="closeCashier()">取消</button>
       <button class="pay-btn buy" style="flex:2" onclick="doPay(${bid},${no},'${type}')">确认支付</button>
@@ -300,7 +324,7 @@ async function openChapter(bid,no){
           <div class="tip">前 ${c.free_chapters} 章已免费读完<br>看个广告或分享给朋友，就能免费接着读</div>
           <button class="pay-btn buy" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'ad'});adUnlock(${bid},${no})">📺 看广告免费读本章</button>
           <button class="pay-btn share" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'share'});shareUnlock(${bid},${no})">↗ 分享给朋友免费读</button>
-          <div style="margin-top:22px;font-size:15px;color:var(--muted)">不想看广告？</div>
+          <div style="margin-top:22px;font-size:var(--fs-xs);color:var(--muted)">不想看广告？</div>
           <button class="pay-btn ch" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'pay_chapter'});startPay(${bid},${no},'chapter',${c.chapter_price_cents})">解锁本章 ¥${(c.chapter_price_cents/100).toFixed(2)}</button>
           <button class="pay-btn ch" onclick="track('unlock_click',{book_id:${bid},chapter_no:${no},channel:'pay_full'});startPay(${bid},${no},'buyout',${c.price_cents})">买断全本 ¥${(c.price_cents/100).toFixed(2)}</button>
         </div>
@@ -317,11 +341,11 @@ async function openChapter(bid,no){
       <div id="content">
         ${paras.map((p,i)=>`<p class="para" data-i="${i}">${esc(p)}</p>`).join('')}
       </div>
-      <div class="interact" id="interact">
+      ${ENABLE_INTERACT?`<div class="interact" id="interact">
         <div class="q" id="iq">互动加载中…</div>
         <div id="iopts"></div>
         <div class="resp" id="resp" style="display:none"></div>
-      </div>
+      </div>`:''}
       <div class="bar">
         <button onclick="nav(-1)" ${c.has_prev?'':'disabled'}>‹ 上一章</button>
         ${c.audio_url?`<button class="primary" id="playBtn" onclick="togglePlay()">▶ 听书</button>`
@@ -336,14 +360,33 @@ async function openChapter(bid,no){
     `;
     window.scrollTo(0,0);
     if(c.audio_url) setupAudio(c);
-    loadInteract(c.chapter_id);
+    if(ENABLE_INTERACT) loadInteract(c.chapter_id);
     reportProgress(bid, no, 0);
     hideMask();
+    initImmersive();
   }catch(e){ hideMask(); app.innerHTML='<div class="err">加载失败：'+e.message+'</div>'; }
+}
+
+// 沉浸式阅读：向下滚动自动隐藏顶栏，向上滚动或点正文中央呼出
+let _immersiveBound = false, _lastY = 0;
+function initImmersive(){
+  const header = document.querySelector('header.top');
+  header.classList.remove('hidden');
+  _lastY = window.scrollY;
+  if(_immersiveBound) return;
+  _immersiveBound = true;
+  window.addEventListener('scroll', ()=>{
+    if(state.view !== 'chapter'){ header.classList.remove('hidden'); return; }
+    const y = window.scrollY;
+    if(y > _lastY + 8 && y > 80) header.classList.add('hidden');
+    else if(y < _lastY - 8 || y <= 80) header.classList.remove('hidden');
+    _lastY = y;
+  }, {passive:true});
 }
 
 // 互动：拉取真实节点（提问+选项）
 async function loadInteract(chapterId){
+  if(!ENABLE_INTERACT) return;
   try{
     const n = await api('/interact/node/'+chapterId);
     document.getElementById('iq').textContent = n.question;
@@ -356,6 +399,7 @@ async function loadInteract(chapterId){
 }
 // 互动：选择后接 LLM 回响
 async function choose(i){
+  if(!ENABLE_INTERACT) return;
   const r=document.getElementById('resp'); r.style.display='block';
   r.innerHTML='<span style="color:var(--muted)">正在为你接上剧情…</span>';
   document.querySelectorAll('#iopts .opt').forEach(b=>b.disabled=true);
